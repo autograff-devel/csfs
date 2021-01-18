@@ -1,7 +1,6 @@
 ''' Global command-line arguments shared by scripts'''
 
 import sys, argparse
-import module_paths
 import csfs.config as config
 
 cfg = config.cfg

@@ -5,10 +5,6 @@ import pdb
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('MACOSX')
-
-# Add module paths, modify module_paths.py to adjust 
-import module_paths
 
 import autograff.svg as svg
 import autograff.plut as plut

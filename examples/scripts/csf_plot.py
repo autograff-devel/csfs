@@ -18,8 +18,6 @@ import numpy as np
 import pdb
 import argparse
 
-import module_paths
-
 import autograff.plut as plut
 reload(plut)
 import autograff.geom as geom
@@ -37,9 +35,6 @@ cfg = sym.cfg
 
 import csfs.common as cmn
 reload(cmn)
-
-import global_cfg
-
 
 print(sys.argv)
 args = argparse.ArgumentParser(description='''CSF analysis scripts command line arguments''')

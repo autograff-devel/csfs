@@ -1,25 +1,18 @@
 # Curvilinear Shape Features 
 
 ## Installation and dependencies
-Running the scripts in this projec requires also downloading or (preferibly) cloning:
-- <https://github.com/colormotor/autograff> Various support Python utilites 
-- <https://github.com/colormotor/csf_analysis> This project, curvilinear shape features
-  
-To simplify setup, clone the repository with a directory hierarchy of this type:
-```
-|── python/
-|── └── projects/
-|── |── └── csf_analysis/
-|── |── |── └── ...
-|── |── modules/
-|── |── └── autograff/
-|── |── |── └── ...
-```
-Where the leafs are this (csf_analysis) and the autograff repositories linked above.
-Note that the parent `python/` directory is not required, but suggested for use in conjunction with future (non-python) projects that would be stored at the same level as the `python/` directory.
+This package depends on the Autograff Python utilities, which can be cloned and installed by following the instructions that are given here:
+<https://github.com/autograff-devel/autograff>
+Following the instructions will take care of all required dependencies.
 
+To locally install this package you will need PIP. A local (and editable) install can be done with:
+```
+cd csfs
+pip install -e .
+```
+This make the package available to Python, with aliases that point to the directory of the repository.
 ### Dependencies
-The simplest way to install all dependencies is the [Miniconda](https://docs.conda.io/en/latest/miniconda.html) package manager. [Anaconda](https://docs.anaconda.com/anaconda/install/) can also be used, by replacing `miniconda` with `anaconda` where it occurs in the following instructions.
+The simplest way to install additional dependencies is the [Miniconda](https://docs.conda.io/en/latest/miniconda.html) package manager. [Anaconda](https://docs.anaconda.com/anaconda/install/) can also be used, by replacing `miniconda` with `anaconda` where it occurs in the following instructions. The procedure also installs PIP.
 
 #### Step 1 - install miniconda
 Download the 64 bit, Python 3.7 version of the Minconda installer [here](https://docs.conda.io/en/latest/miniconda.html). Run the installer, making sure that the installation is made locally, in the user home directory. There should be an option to do so during the installation procedure, and this should avoid the requirement of running dependency installation as a superuser. Once installed, ,miniconda should be installed in the `~/miniconda3/` directory or in `~/opt/miniconda3` (on Mac), and Linux should be something similar. 
@@ -30,16 +23,16 @@ Dependencies are mainly installed from the terminal with the `conda` command. If
 The following installs all required dependencies for all the project
 ```
 conda install -c conda-forge numpy
-conda install -c conda-forge opencv
 conda install -c conda-forge scipy
 conda install -c conda-forge matplotlib
 conda install -c conda-forge pillow
-pip install svgpathtools
+pip install git+https://github.com/mathandy/svgpathtools.git
 conda install -c conda-forge networkx
 conda install -c conda-forge fonttools
 conda install -c conda-forge pyclipper
-conda install -c conda-forge shapely
 ```
+
+Note that it is useful to install svgpathtools from the GIT repo, because the official PIP version does not support rectangles and ellipses.
 
 ### Installation with a custom environment (advanced)
 The package managers [Anaconda](https://docs.anaconda.com/anaconda/install/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html), can be used to isolate the project dependencies by creating a dedicated *environment*. This may be useful to avoid dependency conflicts if an installation already exists.
@@ -55,7 +48,7 @@ conda activate py36autograff
 This will result in all new dependecies being installed in `~/miniconda3/envs/py36autograff`. Note that the environment will be only active for the shell session where `conda activate` has been called. The environment can be deactivated with `conda deactivate`. Once the environment is active, the dependencies can be installed with the instructions in the previous section.
 
 ## Running
-The scripts are located in two directories, `scripts` (perform batch computations) and `figures` (generates specific figures). To run a script either call it from the terminal with python, making sure to navigate to its directory beforehand. Otherwise a script can be opened in an IDE like Spyder, and run by either executing cells (delimited by `#%%` blocks) or running the entire script. When using an IDE, make sure the working directory is set to the script's directory.
+The scripts are located in two directories, `examples/scripts` (perform batch computations) and `example/figures` (generates specific figures). To run a script either call it from the terminal with python, making sure to navigate to its directory beforehand. Otherwise a script can be opened in an IDE like Spyder, and run by either executing cells (delimited by `#%%` blocks) or running the entire script. When using an IDE, make sure the working directory is set to the script's directory.
 
 ### `figures` scripts
 These scripts don't require input paramters and can be run from the terminal, e.g.:

@@ -2,7 +2,6 @@
 import os
 from importlib import reload
 from collections import defaultdict
-import module_paths
 import autograff.plut as plut
 import autograff.geom as geom
 import autograff.utils as utils

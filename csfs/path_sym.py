@@ -201,7 +201,7 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
             l2 = (a-b)%n
             if l1 > l2:
                 print('test_feature: corrupted feature')
-                raise ValueError
+                #raise ValueError
 
     ds = np.mean(geom.chord_lengths(P))
 

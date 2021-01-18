@@ -7,8 +7,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pdb
 
-import module_paths
-
 import autograff.plut as plut
 import autograff.geom as geom
 import autograff.utils as utils
@@ -16,9 +14,7 @@ import autograff.svg as svg
 import autograff.geom.euler_spiral as es
 import csfs.path_sym as sym
 import csfs.common as cmn
-import global_cfg as cfg  # Global script configurations
 
-reload(cfg)
 reload(plut)
 reload(svg)
 reload(sym)
@@ -34,7 +30,7 @@ sym.cfg.minima_smooth_k = 1020
 sym.cfg.minima_smooth_sigma = 30
 
 # test_arc_2.svg'] #, 'wiggle.svg']
-paths = ['ellipses.svg', 'ellipses.svg', 'ellipses-noise.svg']
+paths = ['ellipses.svg', 'ellipses.svg', 'ellipses.svg']
 closed = True
 angle_subds = [np.pi*4/5]  # sym.COMPUTE_MINIMA] #, sym.COMPUTE_MINIMA]
 shapes = []
