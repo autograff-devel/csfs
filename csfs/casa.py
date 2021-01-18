@@ -66,12 +66,13 @@ cfg.debug_draw = False
 
 cfg.draw_steps = False
 cfg.debug_feature_support = True
+cfg.casa_has_minima = False
 
 # Local CSF struct. bit redundant. CSFS in path_sym are computed for each path separately. 
 # Since we are interested in computing CSFs for compound shapes (with holes), and only considering
 # absolute maxima of curvature, the following abstracts the information for a CSF along a flattened version of the shape contours
 # Also simplifies the structure in path_sym, which is overly-complex because of all the iterations in its development
-CSFLocal = namedtuple('CSFLocal', 'i pos anchors center r sign saliency is_sat support contact MA')
+CSFLocal = namedtuple('CSFLocal', 'i pos anchors center r sign saliency is_sat support support_inds contact contact_inds MA area')
 
 #%%
 class FlatShape:
@@ -113,12 +114,14 @@ class FlatShape:
         return self.flat_index(i, a), self.flat_index(i, b)
     #endf
     
-    def wrapped_midpoint_index(self, flat_a, flat_b):
+    def wrapped_midpoint_index(self, flat_a, flat_b, safe=False):
         ia, a = self.shape_index(flat_a)
         ib, b = self.shape_index(flat_b)
         # If the two points are on two different contours 
         # simply return the midpoint as a workaround
-        if ia != ib: 
+        if ia != ib:
+            if safe:
+                return -1
             p = (self.shape[ia][:,a] + self.shape[ib][:,b])/2
             #plut.fill_circle(p, 5, 'k')
             return p
@@ -204,12 +207,18 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
     # Compute CSFs for each contour segment
     #sym.cfg.vma_thresh = cfg.vma_thresh #<-make sure we have the same threshold
     sym.cfg.r_thresh = size * cfg.max_radius_height_ratio
+    sym.cfg.minima_r_thresh = size * cfg.max_radius_height_ratio
+
     #sym.cfg.saliency_thresh = cfg.feature_saliency_thresh
     #sym.cfg.anchor_thresh = cfg.anchor_expansion_tol*ds
     
     stats = {}
     #brk()
-    feature_list = sym.compute_shape_features(shape, closed=True, n_steps=cfg.num_sym_passes, flags=0, draw_steps=cfg.draw_steps, stats=stats)
+    flags = 0
+    if cfg.casa_has_minima:
+        #pdb.set_trace()
+        flags = sym.COMPUTE_MINIMA
+    feature_list = sym.compute_shape_features(shape, closed=True, n_steps=cfg.num_sym_passes, flags=flags, draw_steps=cfg.draw_steps, stats=stats)
 
     if cfg.anchor_expansion_tol > 0:
         feature_list  = [sym.expand_all_anchors(P, features, True, cfg.anchor_expansion_tol) 
@@ -218,6 +227,7 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
     # This is not strictly necessary, unless we want to visualize the CSF symmetry axes
     # Slower because it recomputes MA for each CSF
     for P, features in zip(shape, feature_list):
+        #pdb.set_trace()
         sym.compute_CSFs(features, P, closed=True, compute_axis=cfg.compute_CSF_axes)
     
     if 'nested_CSFs' in stats:
@@ -252,21 +262,24 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
 
             r = f.r
             if cfg.corner_radius_thresh > 0. and r < cfg.corner_radius_thresh*ds:
-                r = cfg.corner_radius_thresh
+                r = cfg.corner_radius_thresh*ds
 
             is_sat = True if ('is_sat' in f.data and f.data['is_sat']) else False
             
             local_features.append(CSFLocal(i=flat.flat_index(i, f.i),
-                                               pos=f.extrema_pos,
-                                               anchors=flatten_anchors(i, f.anchors),
-                                               center=f.center,
-                                               r=r,
-                                               sign=f.sign,
-                                               saliency=f.data['saliency'],
-                                               is_sat=is_sat,
-                                               support=f.data['support'],
-                                               contact=f.data['contact'],
-                                               MA=f.data['MA']))
+                                           pos=P[:,f.i], #f.extrema_pos,
+                                           anchors=flatten_anchors(i, f.anchors),
+                                           center=f.center,
+                                           r=r,
+                                           sign=f.sign,
+                                           saliency=f.data['saliency'],
+                                           is_sat=is_sat,
+                                           support=f.data['support'],
+                                           support_inds=[[flat.flat_index(i, j) for j in seg] for seg in f.data['support_inds']],
+                                           contact=f.data['contact'],
+                                           contact_inds=[flat.flat_index(i, j) for j in f.data['contact_inds']],
+                                           MA=f.data['MA'],
+                                           area=f.data['area']))
             feature_count[i] += 1
             
     return local_features, feature_count
@@ -433,6 +446,7 @@ def compute_casa(MA, features, sign=1):
     points = MA.graph['points']
     vpos = MA.graph['vpos']
     ds = MA.graph['ds']
+    flat = MA.graph['flat']
 
     flexures = {}
     
@@ -444,13 +458,38 @@ def compute_casa(MA, features, sign=1):
     #brk()
     for fi in M:
         f = features[fi]
-        contact = contact_region(MA, f, extend=2) #<- Workaround here. we extend the contact region, because 
+        contact = contact_region(MA, f, extend=5) #<- Workaround here. we extend the contact region, because
                                                   #   some rather large features might produce a pruned branch in MA,
                                                   #   which results in anchors missing along the contact region. Need to check (as an example see CSFs for Ultra Regular 'B')
         for j in contact:
             outline_to_feature[j] = fi
+        # See "n.svg" in svg/junctions for where the above breaks
+        # Pc = np.array([points[i] for i in contact]).T
+        # if fi == 7:
+        #     pdb.set_trace()
+        #     print('test')
     feature_to_node = defaultdict(set)
-    for n in MA.nodes():
+
+    # precomupte midpoints for nodes that have spokes
+    # pointing in the same general direction
+    nodes = list(MA.nodes())
+    node_anchors = []
+    for n in nodes:
+        anchors = list(disks[n].anchors)
+        center = disks[n].center
+        pa, pb = [points[p] for p in anchors]
+        # if abs(anchors[0] - 485) < 10 or abs(anchors[1] - 485) < 10:
+        #     brk()
+        if np.dot(pa - center, pb - center) > 0:
+            mid = flat.wrapped_midpoint_index(*anchors, safe=True)
+            # if mid > 485 and mid < 508:
+            #     brk()
+            if mid >= 0:
+                anchors.append(mid)
+
+        node_anchors.append(anchors)
+
+    for n, p in zip(nodes, node_anchors):
         if MA.degree(n) > 2:
             continue
         p = disks[n].anchors
@@ -461,6 +500,7 @@ def compute_casa(MA, features, sign=1):
     if not len(MA.nodes()):
         return MA
 
+    #brk()
     newnode = np.max([n for n in MA.nodes()])+1
     
     candidates = []
@@ -491,7 +531,7 @@ def compute_casa(MA, features, sign=1):
         if n is not None:
             candidates.append((n, fi, is_flexure))
     #endfor
-    
+
     # Ambiguous cases exist 
     exts = [] #candidates
     for ni, fi, i_flexure in candidates:
@@ -503,16 +543,17 @@ def compute_casa(MA, features, sign=1):
             if fi == fj or j_flexure:
                 continue
             
-            if geom.distance(disks[ni].center, disks[nj].center) < disks[nj].r:
-                valid = False
-                break
+            #if geom.distance(disks[ni].center, disks[nj].center) < disks[nj].r:
+            #    valid = False
+            #    break
             
-        # Check for all existing forks, we don't want a flexure to be within a small epsilon
-        # of one. An example  Hanzi 34233, TODO check for counterexamples? the fatberg effect.
-        for f in forks:
-            if geom.distance(disks[f].center, disks[ni].center) < MA.graph['ds']: # disks[f].r:
-                valid = False
-                break
+        # Check for all existing forks, we don't want a flexure to be within a
+        # small epsilon of one. An example Hanzi 34233, TODO check for
+        # counterexamples? the fatberg effect.
+        # for f in forks:
+        #     if geom.distance(disks[f].center, disks[ni].center) < MA.graph['ds']: # disks[f].r:
+        #         valid = False
+        #         break
         #endfor
         if valid:
             exts.append((ni, fi, i_flexure))
@@ -661,7 +702,7 @@ def get_incident_concavity_indices(G, n, thresh=1.0, concavities=[]): # TODO cha
     return inds
 #endf
 
-def draw_features(MA, convexities=False, markersize=7):
+def draw_features(MA, convexities=False, markersize=7, draw_areas=False):
     features = MA.graph['features']
     points = MA.graph['points']
     for f in features:
@@ -670,6 +711,8 @@ def draw_features(MA, convexities=False, markersize=7):
             plut.stroke_circle(f.center, r, [1.,0.5,0.], alpha=1, linewidth=0.25)
             #plut.draw_marker(points[f.i], 'ro', markersize=2)
             plut.fill_circle(points[f.i], markersize, 'r')
+            if draw_areas:
+                plut.fill_poly(f.area, 'r', alpha=0.5)
         if convexities:
             if f.sign > 0:
                 plut.stroke_circle(f.center, r, [0,0.32,1.], alpha=1, linewidth=0.25)
@@ -725,13 +768,14 @@ def draw_skeleton(MA, clr=np.ones(3)*0.5, alpha=1, linewidth=0.25, draw_spokes=F
 def draw_shape(shape):
     plut.fill_stroke_shape(shape, np.ones(3)*0.95, np.ones(3)*0.25, linewidth=0.5) # alpha=0.5) #, linestyle=':')
     
-def draw_shape_and_skeleton(MA, draw_spokes=False, draw_forks=False, convexities=False, markersize=7):
+def draw_shape_and_skeleton(MA, draw_spokes=False, draw_forks=False, convexities=False, draw_areas=False, markersize=7, skel_alpha=1, features=True):
     plut.fill_stroke_shape(MA.graph['shape'], np.ones(3)*0.95, np.ones(3)*0.25, linewidth=0.5) # alpha=0.5) #, linestyle=':')
     vpos = MA.graph['vpos']
     disks = MA.graph['disks']
-    draw_skeleton(MA)
+    draw_skeleton(MA, alpha=skel_alpha)
     #branches = graph_branches(MA)
-    draw_features(MA, convexities=convexities, markersize=markersize)
+    if features:
+        draw_features(MA, convexities=convexities, markersize=markersize, draw_areas=draw_areas)
     
     #SMA = [branch_contour(branch, vpos) for branch in branches]
     #plut.stroke_shape(SMA, 'k', closed=False, linestyle=':', alpha=0.4)
@@ -755,8 +799,8 @@ def debug_features(MA, branch, F=[], min_radius=2, draw_spokes=False):
     features = MA.graph['features']
     disks = MA.graph['disks']
     points = MA.graph['points']
-    plt.cla()
-    plt.figure(figsize=(8,8))
+    plt.clf()
+    plt.figure(figsize=(3,3))
     plut.stroke_shape(MA.graph['shape'], 'k')
     draw_skeleton(MA)
     
@@ -794,7 +838,7 @@ def debug_features(MA, branch, F=[], min_radius=2, draw_spokes=False):
         else:
             clr = 'b'
         plut.fill_circle(f.center, max(f.r, min_radius), clr, alpha=0.5)
-        plt.text(*f.center+[20,20], '%d: %d'%(i,fi), color='k')
+        plt.text(*f.center+[20,20], '%d'%(fi), color='k')
     plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
 #endf
     
@@ -803,8 +847,8 @@ def debug_forks(MA, forks=[]):
     if not forks:
         forks = [n for n in MA.nodes() if MA.degree(n) > 2]
     
-    plt.cla()
-    plt.figure(figsize=(8,8))
+    plt.clf()
+    plt.figure(figsize=(3,3))
     plut.stroke_shape(MA.graph['shape'], 'k')
     draw_skeleton(MA)
     for fork in forks:
@@ -815,8 +859,8 @@ def debug_forks(MA, forks=[]):
 
     
 def debug_skeleton(MA, forks=[]):
-    plt.cla()
-    plt.figure(figsize=(8,8))
+    plt.clf()
+    plt.figure(figsize=(3,3))
     plut.stroke_shape(MA.graph['shape'], 'k')
     draw_skeleton(MA)
     plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
@@ -838,13 +882,13 @@ def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
     if draw_axis:
         plut.draw_line(f.center, contact[:,0], np.ones(3)*0.5, linewidth=linewidth*0.5, linestyle=':')
         plut.draw_line(f.center, contact[:,-1], np.ones(3)*0.5, linewidth=linewidth*0.5, linestyle=':')
-    plut.fill_circle(f.center, linewidth*3, 'k')
+    plut.fill_circle(f.center, linewidth*5, 'k')
     
     left = parallel_offset(f.support[0], offset)
     #pdb.set_trace()
     right = parallel_offset(f.support[1], offset)
     contact = parallel_offset(f.contact, offset)
-    plut.fill_circle(f.pos, linewidth*5, 'r', zorder=1000)
+    plut.fill_circle(f.pos, linewidth*10, 'r', zorder=1000)
     if type(left)==list:
         left = np.hstack(left)
     if type(right)==list:

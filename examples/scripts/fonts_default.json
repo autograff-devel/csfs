@@ -1,0 +1,18 @@
+{
+    "input_path": "./../../data/fonts",
+    "params":{
+        "type":"ttf",
+        "save_figures":true
+    },
+    "items":["Georgia"
+    ], 
+    "chars":"ABCDEKLMNO",
+    "char_map":{
+        "Hebrew Bold":"אבגדהוזחטיכלמנסעפצקרשת",
+        "Kaiti":"書法书法这句话后来演变成“饮水思源”这个成语",
+        "Kazuraki":"未来を変えろ好きな言葉のカタチを造る",
+        "Std B":"未来を変えろ好きな言葉のカタチを造る"
+    },
+    "comments":["Default font input file. ",
+                "Setting chars to an empty string will parse all capital letters"]
+}

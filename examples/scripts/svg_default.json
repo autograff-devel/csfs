@@ -1,0 +1,11 @@
+{
+    "input_path": "./../../data/svgs",
+    "params":{
+        "type":"svg",
+        "save_figures":true
+    },
+    "items":["smoothie", "S"
+    ], 
+    "comments":["Default svg input file. ",
+        "Setting items to an empty list will parse all svg files in input path"]
+}

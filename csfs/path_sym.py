@@ -38,7 +38,7 @@ from . import voronoi_skeleton as vma
 from . import config as config
 reload(config)
 
-# Configuration
+# Configuration (shared)
 cfg = config.cfg 
 
 # cfg.vma_thresh = 0.5 # VMA pruning threshold (chord residual)
@@ -51,6 +51,7 @@ cfg = config.cfg
 # cfg.cusp_tolerance = 1. # Radius threshold for cusp detection
 
 cfg.r_thresh = 1200. # maximum accepted disk radius  (gets overridden in CASA for relative size)
+cfg.minima_r_thresh = 2000
 
 cfg.discard_nested = True
 cfg.discard_nested_postprocess = False
@@ -92,6 +93,8 @@ cfg.clothoid_nofit_thresh = 1e-2 # Unused
 
 cfg.vma_thresh_farthest = 0.002 # Pruning threshold for Farthest VMA computation (using object angle)
                                 # UNUSED
+
+cfg.only_simple_areas = True # Addition not present in thesis. CSF area must be simple
 
 def debug_print(s):
     if cfg.verbose:
@@ -188,7 +191,8 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
     vma_thresh_old = cfg.vma_thresh
     if vma_thresh is not None:
         cfg.vma_thresh = vma_thresh
-        
+
+    # print("Vma thresh is: %g"%cfg.vma_thresh)
     def test_features(features):
         n = P.shape[1]
         for f in features:
@@ -197,7 +201,7 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
             l2 = (a-b)%n
             if l1 > l2:
                 print('test_feature: corrupted feature')
-                #raise ValueError
+                raise ValueError
 
     ds = np.mean(geom.chord_lengths(P))
 
@@ -205,13 +209,13 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
     if closed or force_static:
         # Assumes no self intersections, faster
         features, MA, vor, delu = sym_extrema(P, ds, closed=closed, full_output=True, is_sat=True) #dynamic_symmetry_extrema
-        
+        self_intersections = []
         if MA is None:
             return []
         disks = MA.graph['disks']
     else:
         # Detect self intersections
-        features = open_sym_extrema(P, ds)
+        features, self_intersections = open_sym_extrema(P, ds, get_intersections=True)
         #features = dynamic_symmetry_extrema(P, closed=closed) 
 
     if len(features):
@@ -242,7 +246,7 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
                    sign=sign1,
                    data={'branch_len':1000})
         features = [f0] + features + [f1]
-    
+
     test_features(features)
     features = merge_features(features, P, closed)
     features = discard_unsalient(features, P, closed)
@@ -255,13 +259,17 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
 
     # all maxima
     for i in range(n_steps):
-        features = sort_features(P, features + compute_local_maxima(P, ds, features, closed=closed, draw_steps=draw_steps==1), closed)
+        features = sort_features(P, features + compute_local_maxima(P, ds, features, closed=closed, draw_steps=draw_steps==1, self_intersections=self_intersections), closed)
         #pdb.set_trace()
         features = merge_features(features, P, closed)
         test_features(features)
         if len(features) != initial_count:
             stats['nested_CSFs'] = True
-    
+            initial_count = len(features)
+        else:
+            #print('Bailing')
+            break
+        
     features = discard_unsalient(features, P, closed)
     
     # minima 
@@ -270,7 +278,7 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
         features = sort_features(P, features + minima, closed)
     
     test_features(features)
-    features = discard_unsalient(features, P, closed)
+    features = discard_unsalient(features, P, closed, only_minima=True)
 
     # inflections
     if flags&COMPUTE_INFLECTIONS:
@@ -319,37 +327,63 @@ def transform_features(mat, features):
 ###############################################################
 ### Extension to open/self intersecting contours
 def segment_path_intersection(pa, pb, segs):
-    for qa, qb in segs:
+    for i, (qa, qb) in enumerate(segs):
         res, ins = geom.segment_intersection(pa, pb, qa, qb)
         if res:
-            return True
-    return False
+            #plut.fill_circle(ins, 7, 'r')
+            return i
+    return None
 
+def segment_path_intersection_sweep(pa, pb, ctr):
+    ins, inds = geom.segment_shape_intersections(pa, pb, [np.array(ctr).T], 0.01, get_indices=True)
+    return ins, inds
+        
 def split_at_self_intersections(P):
     m = P.shape[1]
-    I = [0]
+    #I = [0]
+    I = []
     prev = []
+    prev_ctr = []
     for i in range(m-1):
         pa, pb = P[:,i], P[:,i+1]
         if len(prev)>2:
-            if segment_path_intersection(pa, pb, prev[:-1]):
+            #if segment_path_intersection_sweep(pa, pb, prev_ctr): #segment_path_intersection(pa, pb, prev[:-1]):
+            j = segment_path_intersection(pa, pb, prev[:-1])
+            if j is not None:
+
                 #pdb.set_trace()
-                I.append(i)
+                I.append((i,j)) #(current segment, intersecting segment)
                 prev = [(pa, pb)]
+                prev_ctr = [pa]
                 continue
         prev.append((pa, pb))
-    I.append(m)
+        if not prev_ctr:
+            prev_ctr.append(pa)
+        prev_ctr.append(pb)
+        
+    #I.append(m)
     return I
 
-def open_sym_extrema(P, ds):
-    I = split_at_self_intersections(P)
+def open_sym_extrema(P, ds, self_intersections=None, get_intersections=False):
+    if self_intersections is None:
+        #pdb.set_trace()
+        self_intersections = split_at_self_intersections(P)
+    # Get only intersection index
+    # discard any self intersection that is not fully contained in segment
+    I = [i for i,j in self_intersections if i>0 and i<P.shape[1] and j > 0 and j < P.shape[1]]
+    # Add extremities
+    I = [0] + I + [P.shape[1]]
     #pdb.set_trace()
     features = []
     for a, b in zip(I, I[1:]):
+        #pdb.set_trace()
         local_features = sym_extrema(P[:,a:b], ds, closed=False)
-        local_features = [shift_feature(a, f, P) for f in local_features]
+        local_features = [shift_feature(a, f, P, closed=False) for f in local_features]
         features += local_features
     #features =  merge_features(features, P, False)
+    if get_intersections:
+        return features, self_intersections
+    
     return features
 
 def symmetry_axis(P, closed, farthest, full_output=False, terminals=None):
@@ -369,7 +403,7 @@ def symmetry_axis(P, closed, farthest, full_output=False, terminals=None):
 
 ###############################################################
 ### MEAT 2, features from symmetry axes 
-def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thresh=None, is_sat=False):
+def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thresh=None, is_sat=False, draw_steps=False):
     ''' Find extrema/features from direct computation of medial axis
         Input:
             P: contour
@@ -392,7 +426,8 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
     
     thresh = cfg.vma_thresh
     residual = vma.chord_residual
-    
+
+    # Farthest voronoi settings
     if farthest:
         thresh = cfg.vma_thresh_farthest
         residual = vma.lambda_residual  
@@ -410,11 +445,14 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
         #vma.draw_skeleton(MA)
         #ds = np.linalg.norm(P[:,1] - P[:,0])
         disks = MA.graph['disks']
-                
+
+        if draw_steps:
+            vma.draw_skeleton(MA)
+            
         for e in E:
             if not farthest and disks[e].r > cfg.r_thresh:
                 continue
-            p = sort_anchors(disks[e].anchors, P, closed) 
+            p = sort_anchors(disks[e].anchors, P, closed)
             #p = expand_voronoi_anchors(disks[e].anchors, disks[e], P, closed)
             mid = get_anchor_midpoint_index(p, P, closed) 
             pm = get_anchor_midpoint_pos(p, P, closed)
@@ -423,6 +461,7 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
             anchors.append(p)
             extremities.append(e) 
             extrema_pos.append(pm)
+
         # endfor 
 
         # Sort along contour    
@@ -465,7 +504,7 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
             ftype=FEATURE_POS_EXTREMUM
         else:
             ftype=FEATURE_NEG_EXTREMUM
-            
+
         features.append(Feature(i=extrema[i],
                                 center=vertices[i],
                                 extrema_pos=extrema_pos[i],
@@ -474,8 +513,10 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
                                 sign = signs[i],
                                 type=ftype,
                                 data={'is_sat':is_sat, 'branch_len': MA.graph['data']['branch_lengths'][E[i]]}))
-                                
+
     features = sort_features(P, features, closed)
+    # VMA sometimes creates overlapping contact regions, make sure this does not happen
+    features = force_monotonic(P, features, closed)
 
     # MINIMA CASE
     if farthest and features:
@@ -542,6 +583,9 @@ def compute_CSFs(features, P, closed, compute_saliency=True, compute_axis=True):
             feature_list.append(compute_CSFs(feats, Pp, closed, compute_saliency, compute_axis))
         return feature_list
 
+    # Avoid transitions
+    features = [f for f in features if f.type != FEATURE_TRANSITION]
+
     n = len(features)  
     count = n
     start = 0
@@ -560,33 +604,38 @@ def compute_CSFs(features, P, closed, compute_saliency=True, compute_axis=True):
         else:
             return X[:,n:]
 
-    #pdb.set_trace()
+
     for i in range(start, count):
         f1 = features[(i-1)%n]
         f2 = features[i]
         f3 = features[(i+1)%n]
+        # if i==3:
+        #     pdb.set_trace()
         l_anchor, r_anchor = left_right_support_anchors(P, f1, f2, f3, closed, support_type=cfg.generator_support_type)
-        
+
         # Left support
         a, b =  l_anchor, f2.anchors[0]+1
         left = get_contour_segment(P, a, b, closed=closed)
+        left_inds = get_contour_segment_indices(P, a, b, closed=closed)
 
         # Contact
         contact = get_contour_segment(P, f2.anchors[0], f2.anchors[1]+1, closed=closed)
+        contact_inds = get_contour_segment_indices(P, f2.anchors[0], f2.anchors[1]+1, closed=closed)
 
         # Right support
         a, b =  f2.anchors[1], r_anchor+1
         right = get_contour_segment(P, a, b, closed=closed)
+        right_inds = get_contour_segment_indices(P, a, b, closed=closed)
         
         cenp = f2.center
         r = f2.r
         d1 = contact[:,0]-cenp
         d2 = contact[:,-1]-cenp
-        extremum = cenp + geom.normalize(d1 + d2)*r
+        extremum = P[:,f2.i] #cenp + geom.normalize(d1 + d2)*r
         
         Pv = np.hstack([safe_clip(left, -1), contact[:,:-1], safe_clip(right,1)])
 
-        if compute_axis:
+        if compute_axis and Pv.shape[1] > 4:
             MA = compute_CSF_axis(Pv, f2.center, farthest=is_minimum(f2))
         else:
             MA = None
@@ -594,26 +643,33 @@ def compute_CSFs(features, P, closed, compute_saliency=True, compute_axis=True):
         if compute_saliency: # and not is_minimum(f2):
             if is_minimum(f2):
                 print('minimum')
-            saliency = compute_depth_saliency(P, f1, f2, f3, closed)
+            saliency, area = compute_depth_saliency(P, f1, f2, f3, closed, get_area=True)
         else:
-            saliency = 0
+            saliency, area = 0, None
 
         # If left or right support is short, extend by one sample into adjacent contact region
         if left.shape[1] < 2:
             left = get_contour_segment(P, l_anchor, f2.anchors[0]+2, closed=closed)
+            left_inds = get_contour_segment_indices(P, l_anchor, f2.anchors[0]+2, closed=closed)
+
         if right.shape[1] < 2:
             right = get_contour_segment(P, f2.anchors[1], r_anchor+2, closed=closed)
-        
+            right_inds = get_contour_segment_indices(P, f2.anchors[1], r_anchor+2, closed=closed)
+
         # flip left segment
         left = left[:,::-1]
+        left_inds = left_inds[::-1]
 
         f2.data.update(dict(extremum=extremum,
-                        support=[left, right],
-                        contact=contact,
-                        center=cenp,
-                        saliency=saliency,
-                        contour=Pv,
-                        MA=MA))
+                            support=[left, right],
+                            support_inds=[left_inds, right_inds],
+                            contact=contact,
+                            contact_inds=contact_inds,
+                            center=cenp,
+                            saliency=saliency,
+                            contour=Pv,
+                            MA=MA,
+                            area=area))
     return CSFs
 
 #############################################
@@ -672,6 +728,259 @@ def approximate_params_tangent(Pv, tol=2.):
     s0, s1 = es.fit_euler_spiral(th1-ts, th2-ts)
     return s0, s1
 
+def compute_transition(P, Pv, a, b, sign, adjacent_info, straight=False):
+    if cfg.refine_clothoid_fit:
+        #print "FITTING TRANSITION %d, start with: %.3f %.3f"%(j, s0,s1)
+        
+        #pdb.set_trace()
+        Pv_samp = geom.uniform_sample_n(Pv, cfg.spiral_subdivision, closed=False)
+        with perf_timer('Tangent approx'):
+            s0, s1 = approximate_params_tangent(Pv_samp)
+        
+        with perf_timer('Clothoid fit main'):
+            #pdb.set_trace()
+            (s0, s1), dx = es.fit_clothoid(Pv_samp, (s0, s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
+        # if f1.type == FEATURE_ENDPOINT:
+        #     with perf_timer('Clothoid fit first endpoint'):
+        #         ss, dx2 = es.fit_clothoid(Pv_samp, (-s0, s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
+        #         if np.mean(dx2) < np.mean(dx):
+        #             s0, s1 = ss
+        # if f2.type == FEATURE_ENDPOINT:
+        #     with perf_timer('Clothoid fit second endpoint'):
+        #         ss, dx2 = es.fit_clothoid(Pv_samp, (s0, -s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
+        #         if np.mean(dx2) < np.mean(dx):
+        #             s0, s1 = ss
+
+
+
+        # Adjust curvature if estimate is near to bounding features
+        # if cfg.refine_spiral_curv:
+        #     k0, k1, ld = to_kappa(P, a, b, s0, s1)
+        #     khat_0 = 1. / f1.r * -f1.sign
+        #     khat_1 = 1. / f2.r * -f2.sign
+        #     shat_0, shat_1 = to_s(P, a, b, khat_0, khat_1, ld)
+
+        #     if abs(k0 - khat_0) < 0.05:
+        #         s0 = shat_0
+        #     if abs(k1 - khat_1) < 0.05:
+        #         s1 = shat_1
+    else:
+        T = tangent_cover(Pv, 1)
+        t1 = T[0]
+        t2 = T[-1]
+        th1 = np.arctan2(t1[1], t1[0])
+        th2 = np.arctan2(t2[1], t2[0])
+
+        p1 = Pv[:,0]
+        p2 = Pv[:,-1]
+        ts = np.arctan2(p2[1]-p1[1], p2[0]-p1[0])
+        s0, s1 = es.fit_euler_spiral(th1-ts, th2-ts)
+
+        if np.sign(s1) != np.sign(s0):
+            infl_t = abs(s0) / (abs(s1) + abs(s0))
+            #infl_t = abs(s0) / abs(s1 - s0)
+            infl = a + int(infl_t * Pv.shape[1])
+        else:
+            # with same sign get mid point (hack?)
+            infl = a + Pv.shape[1]//2
+
+    if np.sign(s1) != np.sign(s0):
+        infl_t = abs(s0) / (abs(s1) + abs(s0))
+        #infl_t = abs(s0) / abs(s1 - s0)
+        infl = a + int(infl_t * Pv.shape[1])
+    else:
+        # with same sign get mid point (hack?)
+        infl = a + Pv.shape[1]//2
+            
+    f = Feature(i=infl%P.shape[1],
+                center=P[:,infl%P.shape[1]],
+                extrema_pos=P[:,infl%P.shape[1]],
+                r=cfg.inf_radius,
+                anchors=(a,b),
+                type=FEATURE_TRANSITION,
+                sign=sign,
+                data={'branch_len':1e-5, 's':(s0, s1), 'is_straight':straight, 'adjacent_info':adjacent_info})
+    return f
+
+
+# def compute_transitions(features, P, closed, only_maxima=False):
+#     ''' Compute remaining transition regions between CSFS
+#         Optionally only between absolute maxima and endpoints
+#     '''
+#     if type(P) == list:
+#         return [compute_transitions(F, Pp, closed) for F, Pp in zip(features, P)]
+    
+#     m = len(features)
+    
+#     transitions = []
+#     j = 1
+
+#     count = m
+#     # if closed
+#     closed = True
+#     if features[0].type == FEATURE_ENDPOINT:
+#         count = count-1
+#         closed = False
+    
+#     features_2 = []
+
+#     debug_print('Computing transitions\n')
+
+#     for i in range(count):
+#         f1 = features[i]
+#         f2 = features[(i+1)%m]
+
+#         if True: #cfg.verbose:
+#             utils.progress_bar(float(i)/(count))
+        
+#         # We may want to compute transitions only between opposite sign maxima and endpoints
+#         if only_maxima: 
+#             if is_minimum(f1) or is_minimum(f2):
+#                 features_2.append(f1)
+#                 continue
+            
+#         if f1.type == FEATURE_INFLECTION or f2.type == FEATURE_INFLECTION:
+#             features_2.append(f1)
+#             continue
+        
+#         a, b = f1.anchors[1], f2.anchors[0]
+#         #pdb.set_trace()
+#         if not closed and b < a: # HACK, TODO need to sort this eventually (after lognormal)
+#             #pdb.set_trace()
+#             print('Flipped ordering')
+#             a, b = b, a
+
+#         Pv = get_contour_segment(P, a, b, closed)
+#         # Skip very short segments (could use straight lines here)
+#         if len(Pv.shape) < 2 or Pv.shape[1] < 5:
+#             print("Short one: %s"%i)
+#             infl = (a+b)//2
+#             s0 = 0.01
+#             s1 = s0 + 1e-8
+
+#             features_2.append(f1)
+#             features_2.append(Feature(i=infl,
+#                                    center=P[:,infl],
+#                                    extrema_pos=P[:,infl],
+#                                    r=cfg.inf_radius,
+#                                    anchors=(a,b),
+#                                    type=FEATURE_TRANSITION,
+#                                    sign=f1.sign,
+#                                    data={'branch_len':1e-5, 's':(s0, s1), 'is_straight':True}))
+
+#             debug_print("SHORT TRANSITION")
+#             continue
+
+#         if cfg.refine_clothoid_fit:
+#             #print "FITTING TRANSITION %d, start with: %.3f %.3f"%(j, s0,s1)
+#             j = j+1
+            
+#             Pv_samp = geom.uniform_sample_n(Pv, 30, closed=False)
+#             with perf_timer('Tangent approx'):
+#                 s0, s1 = approximate_params_tangent(Pv_samp)
+            
+#             with perf_timer('Clothoid fit main'):
+#                 (s0, s1), dx = es.fit_clothoid(Pv_samp, (s0, s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
+#             # if f1.type == FEATURE_ENDPOINT:
+#             #     with perf_timer('Clothoid fit first endpoint'):
+#             #         ss, dx2 = es.fit_clothoid(Pv_samp, (-s0, s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
+#             #         if np.mean(dx2) < np.mean(dx):
+#             #             s0, s1 = ss
+#             # if f2.type == FEATURE_ENDPOINT:
+#             #     with perf_timer('Clothoid fit second endpoint'):
+#             #         ss, dx2 = es.fit_clothoid(Pv_samp, (s0, -s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
+#             #         if np.mean(dx2) < np.mean(dx):
+#             #             s0, s1 = ss
+
+#             if np.sign(s1) != np.sign(s0):
+#                 infl_t = abs(s0) / abs(s1 - s0)
+#                 infl = a + int(infl_t * Pv.shape[1])
+#             else:
+#                 # with same sign get mid point (hack?)
+#                 infl = a + Pv.shape[1]//2
+
+#             # Adjust curvature if estimate is near to bounding features
+#             if cfg.refine_spiral_curv:
+#                 k0, k1, ld = to_kappa(P, a, b, s0, s1)
+#                 khat_0 = 1. / f1.r * -f1.sign
+#                 khat_1 = 1. / f2.r * -f2.sign
+#                 shat_0, shat_1 = to_s(P, a, b, khat_0, khat_1, ld)
+
+#                 if abs(k0 - khat_0) < 0.05:
+#                     s0 = shat_0
+#                 if abs(k1 - khat_1) < 0.05:
+#                     s1 = shat_1
+#         else:
+#             T = tangent_cover(Pv, 1)
+#             t1 = T[0]
+#             t2 = T[-1]
+#             th1 = np.arctan2(t1[1], t1[0])
+#             th2 = np.arctan2(t2[1], t2[0])
+
+#             p1 = Pv[:,0]
+#             p2 = Pv[:,-1]
+#             ts = np.arctan2(p2[1]-p1[1], p2[0]-p1[0])
+#             s0, s1 = es.fit_euler_spiral(th1-ts, th2-ts)
+
+#             if np.sign(s1) != np.sign(s0):
+#                 infl_t = abs(s0) / abs(s1 - s0)
+#                 infl = a + int(infl_t * Pv.shape[1])
+#             else:
+#                 # with same sign get mid point (hack?)
+#                 infl = a + Pv.shape[1]//2
+
+#         #mid = (a + b)//2
+#         features_2.append(f1)
+#         features_2.append(Feature(i=infl%P.shape[1],
+#                                    center=P[:,infl%P.shape[1]],
+#                                    extrema_pos=P[:,infl%P.shape[1]],
+#                                    r=cfg.inf_radius,
+#                                    anchors=(a,b),
+#                                    type=FEATURE_TRANSITION,
+#                                    sign=f1.sign,
+#                                    data={'branch_len':1e-5, 's':(s0, s1), 'is_straight':False}))
+                   
+#     if not closed:
+#         features_2.append(f2)
+
+#     debug_print('Finished transitions')
+#     return features_2 #sort_features(transitions + features, remove_duplicates=False)
+
+# def subdivide_curved_segments(Pv, a, b):
+#     phi = geom.turning_angles(Pv)
+#     k = np.abs(np.sum(phi))
+#     maxang = np.pi/2 #np.pi*3/4
+#     #pdb.set_trace()
+#     if k > maxang:
+#         #pdb.set_trace()
+#         nsubd =  int(k/maxang)
+#         print('Subdividing %d times'%(nsubd))
+#         print(geom.degrees(k))
+
+#         subd = np.linspace(a, b, 2 + nsubd).astype(int)
+#         I = subd-a
+#         m = len(I)
+#         spans = [[Pv[:,I[i]:I[i+1]], subd[i], subd[i+1]] for i in range(m-1)]
+#         return spans
+#     return [[Pv, a, b]]
+
+def subdivide_curved_segments(Pv, a, b):
+    phi = geom.turning_angles(Pv)
+    k = np.abs(np.sum(np.abs(phi)))
+    #k = np.abs(np.sum(phi))
+    maxang = cfg.transition_angle_subd #np.pi * 4/5 ##*3/4
+    #print("maxang")
+    #print(maxang)
+    #print(k)
+    if k > maxang and Pv.shape[1] > 4:
+        #pdb.set_trace()
+        m = Pv.shape[1]//2
+        print('Subdividing: %d -> [%d, %d], [%d, %d]'%(Pv.shape[1], a, a+m+1, a+m, b))
+        
+        return (subdivide_curved_segments(Pv[:,:m], a, a+m) +
+                subdivide_curved_segments(Pv[:,m:], a+m, b))
+    return [[Pv, a, b]]
+
 def compute_transitions(features, P, closed, only_maxima=False):
     ''' Compute remaining transition regions between CSFS
         Optionally only between absolute maxima and endpoints
@@ -680,6 +989,8 @@ def compute_transitions(features, P, closed, only_maxima=False):
         return [compute_transitions(F, Pp, closed) for F, Pp in zip(features, P)]
     
     m = len(features)
+    if not m:
+        return features
     
     transitions = []
     j = 1
@@ -695,9 +1006,13 @@ def compute_transitions(features, P, closed, only_maxima=False):
 
     debug_print('Computing transitions\n')
 
+    ds = np.mean(geom.chord_lengths(P))
+
     for i in range(count):
         f1 = features[i]
         f2 = features[(i+1)%m]
+        adjacent_info = {'sign':(f1.sign, f2.sign),
+                         'type':(f1.type, f2.type)}
 
         if True: #cfg.verbose:
             utils.progress_bar(float(i)/(count))
@@ -721,7 +1036,9 @@ def compute_transitions(features, P, closed, only_maxima=False):
 
         Pv = get_contour_segment(P, a, b, closed)
         # Skip very short segments (could use straight lines here)
-        if len(Pv.shape) < 2 or Pv.shape[1] < 5:
+        is_straight = is_segment_straight(Pv, ds)
+        print('straight: ' + str(is_straight))
+        if len(Pv.shape) < 2 or Pv.shape[1] < 5: # or is_segment_straight(Pv, ds):
             print("Short one: %s"%i)
             infl = (a+b)//2
             s0 = 0.01
@@ -735,83 +1052,49 @@ def compute_transitions(features, P, closed, only_maxima=False):
                                    anchors=(a,b),
                                    type=FEATURE_TRANSITION,
                                    sign=f1.sign,
-                                   data={'branch_len':1e-5, 's':(s0, s1), 'is_straight':True}))
+                                   data={'branch_len':1e-5, 's':(s0, s1),
+                                         'is_straight':True,
+                                         'adjacent_info':adjacent_info}))
 
-            debug_print("SHORT TRANSITION")
+            debug_print("Straight or short transition")
             continue
 
-        if cfg.refine_clothoid_fit:
-            #print "FITTING TRANSITION %d, start with: %.3f %.3f"%(j, s0,s1)
-            j = j+1
-            
-            Pv_samp = geom.uniform_sample_n(Pv, 30, closed=False)
-            with perf_timer('Tangent approx'):
-                s0, s1 = approximate_params_tangent(Pv_samp)
-            
-            with perf_timer('Clothoid fit main'):
-                (s0, s1), dx = es.fit_clothoid(Pv_samp, (s0, s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
-            # if f1.type == FEATURE_ENDPOINT:
-            #     with perf_timer('Clothoid fit first endpoint'):
-            #         ss, dx2 = es.fit_clothoid(Pv_samp, (-s0, s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
-            #         if np.mean(dx2) < np.mean(dx):
-            #             s0, s1 = ss
-            # if f2.type == FEATURE_ENDPOINT:
-            #     with perf_timer('Clothoid fit second endpoint'):
-            #         ss, dx2 = es.fit_clothoid(Pv_samp, (s0, -s1), tol=cfg.clothoid_opt_xtol, debug_draw=cfg.clothoid_debug_steps, get_err=True)
-            #         if np.mean(dx2) < np.mean(dx):
-            #             s0, s1 = ss
-
-            if np.sign(s1) != np.sign(s0):
-                infl_t = abs(s0) / abs(s1 - s0)
-                infl = a + int(infl_t * Pv.shape[1])
-            else:
-                # with same sign get mid point (hack?)
-                infl = a + Pv.shape[1]//2
-
-            # Adjust curvature if estimate is near to bounding features
-            if cfg.refine_spiral_curv:
-                k0, k1, ld = to_kappa(P, a, b, s0, s1)
-                khat_0 = 1. / f1.r * -f1.sign
-                khat_1 = 1. / f2.r * -f2.sign
-                shat_0, shat_1 = to_s(P, a, b, khat_0, khat_1, ld)
-
-                if abs(k0 - khat_0) < 0.05:
-                    s0 = shat_0
-                if abs(k1 - khat_1) < 0.05:
-                    s1 = shat_1
-        else:
-            T = tangent_cover(Pv, 1)
-            t1 = T[0]
-            t2 = T[-1]
-            th1 = np.arctan2(t1[1], t1[0])
-            th2 = np.arctan2(t2[1], t2[0])
-
-            p1 = Pv[:,0]
-            p2 = Pv[:,-1]
-            ts = np.arctan2(p2[1]-p1[1], p2[0]-p1[0])
-            s0, s1 = es.fit_euler_spiral(th1-ts, th2-ts)
-
-            if np.sign(s1) != np.sign(s0):
-                infl_t = abs(s0) / abs(s1 - s0)
-                infl = a + int(infl_t * Pv.shape[1])
-            else:
-                # with same sign get mid point (hack?)
-                infl = a + Pv.shape[1]//2
-
-        #mid = (a + b)//2
+    
         features_2.append(f1)
-        features_2.append(Feature(i=infl%P.shape[1],
-                                   center=P[:,infl%P.shape[1]],
-                                   extrema_pos=P[:,infl%P.shape[1]],
+        Pv_smooth = geom.gaussian_smooth_contour(Pv, cfg.subdivision_smooth_sigma*ds, False)
+        #pdb.set_trace()
+
+        spans = subdivide_curved_segments(Pv_smooth, a, b)
+        #pdb.set_trace()
+        for i, (Ppv, ia, ib) in enumerate(spans):
+            if i > 0:
+                ftype = FEATURE_POS_MINIMUM
+                
+                if f1.sign < 0:
+                    ftype = FEATURE_NEG_MINIMUM
+
+                if closed:
+                    ia = ia%P.shape[1]
+                    ib = ib%P.shape[1]
+                features_2.append(Feature(i=ia,
+                                   center=P[:,ia],
+                                   extrema_pos=P[:,ia],
                                    r=cfg.inf_radius,
-                                   anchors=(a,b),
-                                   type=FEATURE_TRANSITION,
+                                   anchors=(ia,ia),
+                                   type=ftype,
                                    sign=f1.sign,
-                                   data={'branch_len':1e-5, 's':(s0, s1), 'is_straight':False}))
-                   
+                                   data={'branch_len':1e-5, 'is_straight':is_straight}))
+                
+            features_2.append(compute_transition(P, Ppv, ia, ib, f1.sign, adjacent_info, straight=is_straight))
+
     if not closed:
         features_2.append(f2)
+        # make sure that any transition next to end-point is labelled
+        for f in [features_2[1], features_2[-1]]:
+            if f.type == FEATURE_TRANSITION:
+                f.data['end_transition'] = True
 
+    
     debug_print('Finished transitions')
     return features_2 #sort_features(transitions + features, remove_duplicates=False)
 
@@ -873,6 +1156,7 @@ def sort_anchors(p, P, closed):
     return a, b
 # end func  
 
+#def force_monotonic_anchors(f1, f2, )
 def arg_sort_indices(I, P, closed):
     if not closed:
         return np.argsort(I)
@@ -1000,10 +1284,65 @@ def sort_features(P, features, closed, remove_duplicates=True):
         features = [f for i,f in enumerate(features) if not i in I]
     return features
 
+def contact_regions_overlap(f1, f2, P, closed):
+    if not closed:
+        a, b = f1.anchors[1], f2.anchors[0]
+        if b < a:
+            return True
+        return False
+    # endif
+    a, b = f1.anchors[1], f2.anchors[0]
+    n = P.shape[1]
+    # Test if second anchor of first feature is closer to second extrama
+    if (f2.i - a)%n < (f2.i - b)%n:
+        return True
+    return False
+#endf
+
+def contact_region_length(f, P, closed):
+    if closed:
+        return f.anchors[1] - f.anchors[0]
+    n = P.shape[1]
+    return (f.anchors[1] - f.anchors[0])%n
+#endf
+
+def force_monotonic(P, features, closed):
+    ''' Removes potentially overlapping contact regions
+    Check consecutive feature pairs, if the first contact region overlaps with the second,
+    shrink the longest contact region and recompute midpoint'''
+    if not features:
+        return features
+    I = list(range(len(features)))
+    if closed:
+        I = I + [0]
+    features_replace = {}
+    for i, j in zip(I, I[1:]):
+        fi = features[i]
+        fj = features[j]
+        if contact_regions_overlap(fi, fj, P, closed):
+            if contact_region_length(fi, P, closed) > contact_region_length(fj, P, closed):
+                #pdb.set_trace()
+                #contact_regions_overlap(fi, fj, P, closed)
+                a, b = fi.anchors[0], fj.anchors[0]
+                fi = fi._replace(anchors=(a, b), i=get_anchor_midpoint_index((a,b), P, closed))
+                features_replace[i] = fi
+            else:
+                #pdb.set_trace()
+                #contact_regions_overlap(fi, fj, P, closed)
+                a, b = fi.anchors[1], fj.anchors[1]
+                fj = fj._replace(anchors=(a, b), i=get_anchor_midpoint_index((a,b), P, closed))
+                features_replace[j] = fj
+
+    features = [f for f in features]
+    for i, f in features_replace.items():
+        features[i] = f
+
+    return features
+
 #######################################
 # ABSOLUTE MAXIMA
 
-def compute_local_maxima(P, ds, features, closed=True, draw_steps=False, P_whole=None):
+def compute_local_maxima(P, ds, features, closed=True, draw_steps=False, P_whole=None, self_intersections=[]):
     ''' Compute extrema for each part defined between two features'''
     if P_whole is None:
         P_whole = P
@@ -1018,11 +1357,14 @@ def compute_local_maxima(P, ds, features, closed=True, draw_steps=False, P_whole
         
     res = []
     for f1, f2 in zip(features_loc, features_loc[1:]):
+        # pdb.set_trace()
         if draw_steps:
             plt.figure(figsize=(5,5))
+            # if (f1.anchors[1]==143 and f2.anchors[0]==257):
+            #     pdb.set_trace()
             plt.title(str((f1.anchors[1], f2.anchors[0])))
             plut.stroke_poly(P_whole, 'k', closed=closed)
-        local, Pv, zone = compute_segment_maxima(P, ds, f1, f2, closed=closed, farthest=False, draw_steps=draw_steps)
+        local, Pv, zone = compute_segment_maxima(P, ds, f1, f2, closed=closed, farthest=False, draw_steps=draw_steps, self_intersections=self_intersections)
         if draw_steps:
             plut.plt_setup()
             plut.set_axis_limits(P_whole, 7)
@@ -1030,8 +1372,8 @@ def compute_local_maxima(P, ds, features, closed=True, draw_steps=False, P_whole
                 plt.savefig('step_%d.pdf'%(cfg.step_count))
             plt.show()
         if local:
-            # Recurse here?                         
-            local = [f1] + [shift_feature(zone[0], f, P) for f in local]
+            # Recurse here?
+            local = [f1] + [shift_feature(zone[0], f, P, closed) for f in local]
             res += local
     
     return res 
@@ -1047,7 +1389,7 @@ def discard_nested_feature(P, f, f1, f2):
     
     return False
 
-def select_most_salient_feature(P, start_feature, end_feature, features, closed, draw=False):
+def select_most_salient_feature(P, start_feature, end_feature, features, closed, start, draw=False):
     if not features:
         return []
     
@@ -1056,7 +1398,7 @@ def select_most_salient_feature(P, start_feature, end_feature, features, closed,
         if not features:
             return []
         
-    saliency = [compute_depth_saliency(P, start_feature, f, end_feature, closed, debug_draw=draw) for f in features]
+    saliency = [compute_depth_saliency(P, start_feature, shift_feature(start, f, P, closed), end_feature, closed, debug_draw=draw) for f in features]
     i = np.argmax(saliency)
     f = features[i]
     
@@ -1074,8 +1416,8 @@ def select_most_salient_feature(P, start_feature, end_feature, features, closed,
             plt.text(*f.center, '%s %.4f'%(str([ff.i for ff in features]),saliency[i]))
     return []
 
-def compute_segment_maxima(P, ds, start_feature, end_feature, closed, farthest=False, draw_steps=False, get_MA=False):
-    ''' Compute absolute maxima for a part of the contour defined between two features'''
+def compute_segment_maxima(P, ds, start_feature, end_feature, closed, farthest=False, draw_steps=False, self_intersections=[]):
+    ''' Compute absolute maxima for a part of the contour segment defined between two features'''
     if farthest:
         clr = 'b'
         
@@ -1089,42 +1431,40 @@ def compute_segment_maxima(P, ds, start_feature, end_feature, closed, farthest=F
     a, b = start_feature.anchors[1],  end_feature.anchors[0]
     
     if not closed and b-a < 4:
-        if get_MA:
-            return [], P, (0,0), None 
-        else:
-            return [], P, (0,0)
+        return [], P, (0,0)
 
     if (b-a)%n < 4:
-        if get_MA:
-            return [], P, (0,0), None 
-        else:
-            return [], P, (0,0)
+        return [], P, (0,0)
     
     Pv = get_contour_segment(P, a, b, closed=closed) #i, end_feature.i+1) #
-    #pdb.set_trace()
+
+    # Shift self intersections to local segment
+    self_intersections = [(i-a, j-a) for i,j in self_intersections]
+
     if len(Pv.shape) < 2:
         print("Short segment!")
         print((a, b))
         print(n)
         
-    #pdb.set_trace()
-    features, MA, vor, delu = sym_extrema(Pv, ds, closed=False, farthest=farthest, full_output=True)
+    features = open_sym_extrema(Pv, ds, self_intersections)
+    # features = sym_extrema(Pv, ds, closed=False, farthest=farthest, draw_steps=draw_steps) #, full_output=True)
     if draw_steps:
         plut.stroke_poly(Pv, 'b', linewidth=2., closed=False)
         #vma.draw_voronoi(vor, 'k', alpha=0.3)
-        vma.draw_skeleton(MA)
+        
         #if features:
         draw_features(features, Pv, 'r', markersize=cfg.debug_draw_markersize) #draw_disks=True)
 
     #features = select_most_salient_feature(P, Pv, features, draw=draw_steps)
-    features = select_most_salient_feature(P, start_feature, end_feature, features, closed, draw=draw_steps)
+    #pdb.set_trace()
+    #if (a,b)==(143,257):
+    #    pdb.set_trace()
+    #pdb.set_trace()
+    features = select_most_salient_feature(P, start_feature, end_feature, features, closed, start=a, draw=draw_steps)
 
     if features and draw_steps:
         pass
-    if get_MA:
-        return features, Pv, (a,b), MA
-    else:
-        return features, Pv, (a,b)
+    return features, Pv, (a,b)
     
 #######################################
 # HELPERS
@@ -1159,9 +1499,25 @@ def circular_sort_group(P, features, group):
         rolled_groups.append(roll_list(group, i))
         lengths.append(feature_list_length(P, features, rolled_groups[-1]))
     return rolled_groups[np.argmin(lengths)]
-    
+
+def get_contour_segment_indices(X, a, b, closed=True):
+    n = X.shape[1]
+
+    if not closed:
+        return list(range(max(0,a), min(b,n)))
+
+    #if a==b:
+    #    m = X.shape[1]
+    #else:
+    m = (b-a)%n
+    if m == 0:
+        m = X.shape[1]
+    return [(a+i)%n for i in range(m)]
+
 def get_contour_segment(X, a, b, closed=True):
-    ''' Gets a (wrapped) contour segment between a and b'''
+    ''' Gets a (wrapped) contour segment between a and b
+    TODO use indices from above
+    '''
     n = X.shape[1]
 
     if not closed:
@@ -1175,13 +1531,18 @@ def get_contour_segment(X, a, b, closed=True):
         m = X.shape[1]
     Xp = np.array([X[:,(a+i)%n] for i in range(m)]).T
     return Xp
-    
-def shift_feature(offset, f, P):
+
+def shift_feature(offset, f, P, closed):
     ''' Shifts indices of a feature (wrapped)'''
     n = P.shape[1]
-    return f._replace(i=(f.i+offset)%n,
-                     anchors=((f.anchors[0]+offset)%n, (f.anchors[1]+offset)%n))
-                   
+    if closed:
+        return f._replace(i=(f.i+offset)%n,
+                        anchors=((f.anchors[0]+offset)%n, (f.anchors[1]+offset)%n))
+    else:
+        return f._replace(i=np.clip(f.i+offset, 0, n),
+                        anchors=(np.clip(f.anchors[0]+offset, 0, n),
+                                 np.clip(f.anchors[1]+offset, 0, n)))
+
 def expand_feature_anchors(P, f, closed, thresh=None):
     ''' Expands anchor points to a given tolerance from contour'''
     if thresh==None:
@@ -1224,37 +1585,37 @@ def expand_feature_anchor_at(features, P, i, closed, thresh=None):
             
     n = P.shape[1]
     anchors = f.anchors
+    # if i==3: # or i==4:
+    #     pdb.set_trace()
+    # hanzi 37276 is a good corner case for anchor expansion
     if closed:
         a1 = anchors[0]%n
         while abs(np.linalg.norm(f.center - P[:,a1]) - f.r) < thresh:
-            i = (a1 - 1)%n
-            if i==f_prev.anchors[1]:
+            if a1==f_prev.anchors[1]:
                 break
-            a1 = i
+            a1 = (a1 - 1)%n
 
         a2 = anchors[1]%n
         while abs(np.linalg.norm(f.center - P[:,a2]) - f.r) < thresh:
-            i = (a2 + 1)%n
-            if i==f_next.anchors[0]:
+            if a2==f_next.anchors[0]:
                 break
-            a2 = i
+            a2 = (a2 + 1)%n
+
     else:
         a1 = anchors[0] #, n-1)
         a2 = anchors[1] #, n-1)
         while abs(np.linalg.norm(f.center - P[:,a1]) - f.r) < thresh and a1 > 0:
-            i = a1 - 1
-            if i < 0:
+            if a1 == 0:
                 break
-            if f_prev is not None and i==f_prev.anchors[1]:
+            if f_prev is not None and a2==f_prev.anchors[1]:
                 break
-            a1 = i
+            a1 = a1 - 1
         while abs(np.linalg.norm(f.center - P[:,a2]) - f.r) < thresh and a2 < n-1:
-            i = a2 + 1
-            if i >= n:
+            if a2 >= n-1:
                 break
-            if f_next is not None and i==f_next.anchors[0]:
+            if f_next is not None and a2==f_next.anchors[0]:
                 break
-            a2 = i
+            a2 = a2 + 1
 
     d = ((a2 - a1)%n) // 2    
     mid = (a1 + d)%n
@@ -1307,11 +1668,245 @@ def expand_and_recompute_midpoint(P, f, closed, thresh=None, limits=None):
 
     return f._replace(i=(a1+a2)//2, anchors=(a1, a2))
 
+def plot_curvature_reconstruction(P, features, closed, lw=0.5):
+    reconstruct_curvature(P, features, closed, True, lw)
 
+def s0s1_to_kappa(P, a, b, s0, s1):
+    d = np.linalg.norm(P[:,a] - P[:,b])
+    l = np.sqrt((es.C_(s1) - es.C_(s0))**2 + (es.S_(s1) - es.S_(s0))**2)
+    return np.pi * s0 * (l/d),  np.pi * s1 * (l/d),  # abs(sall[1] - sall[0])
+
+def f_to_kappa(P, f):
+    return s0s1_to_kappa(P, *f.anchors, *f.data['s'])
+
+    s0,s1 = f.data['s']
+    d = np.linalg.norm(P[:,f.anchors[0]] - P[:,f.anchors[1]])
+    l = np.sqrt((es.C_(s1) - es.C_(s0))**2 + (es.S_(s1) - es.S_(s0))**2)
+    return np.pi * s0 * (l/d),  np.pi * s1 * (l/d),  # abs(sall[1] - sall[0])
+    #return es.t_to_kappa(s0) * (l/d),  es.t_to_kappa(s1) * (l/d),  # abs(sall[1] - sall[0])
+ #   return s*s*np.sign(s)*np.pi
+    spio2 = np.sqrt(np.pi * .5)
+    return s / spio2
+    #return s
+
+labels = {}
+
+def one_label(txt=''):
+    if txt=='':
+        labels.clear()
+    if txt in labels:
+        return ''
+    labels[txt] = 1
+    return txt
+
+def is_potential_inflection(f):
+    sign = f.data['adjacent_info']['sign']
+    type = f.data['adjacent_info']['type']
+    if sign[0] == sign[1]:
+        return False
+    if type[0] != FEATURE_POS_EXTREMUM and type[0] != FEATURE_NEG_EXTREMUM:
+        return False
+    if type[1] != FEATURE_POS_EXTREMUM and type[1] != FEATURE_NEG_EXTREMUM:
+        return False
+    return True
+    
+def reconstruct_curvature(P, features, closed, plot=False, lw=0.5, start=0, get_start=False):
+    one_label()
+    
+    if type(P)==list: # compound shape case
+        inflections = []
+        start = 0
+        for Pp, Ff in zip(P, features):
+            I, start = reconstruct_curvature(Pp, Ff, closed, plot, lw, start, get_start=True)
+            inflections.append(I)
+        return inflections
+
+    kappa = geom.curvature(P, closed=closed)
+    if cfg.curvature_smoothing > 0:
+        kappa = utils.gaussian_filter1d(kappa, cfg.curvature_smoothing)
+        
+    x = np.linspace(start, start+kappa.size-1, kappa.size)
+    if plot:
+        plt.plot(x, kappa, 'k', alpha=0.5, label='curvature', linewidth=0.5)
+    ds = np.mean(geom.chord_lengths(P))
+
+    is_trans = False
+    inflections = []
+    transitions = []
+
+    for i, f in enumerate(features):
+        clr = feature_colors[f.type]
+
+        if f.type==FEATURE_INFLECTION or f.type==FEATURE_TRANSITION:
+            lbl = 'transition spirals'
+            if f.type==FEATURE_INFLECTION:
+                lbl = 'inflections'
+                if plot:
+                    plut.draw_marker([x[f.i], 0.], clr, label=one_label(lbl), markersize=4)
+                #inflections.append(f.i)
+            else:
+                #pdb.set_trace()
+                transitions.append(f)
+                # if is_trans:
+                #     s0, s1 = f.data['s']
+                #     a, b = f.anchors
+                # else:
+                #     s1 = f.data['s'][1]
+                #     b = f.anchors[1]
+                # is_trans = True
+
+            xspan = x[f.anchors[0]:f.anchors[1]]
+            if f.anchors[1] < f.anchors[0]:
+                xspan = x[f.anchors[0]:]
+
+            print(f.anchors)
+            s = f.data['s']
+
+            kk = f_to_kappa(P, f)
+            k = np.linspace(kk[0], kk[1], len(xspan))
+
+            if plot:
+                if f.type==FEATURE_TRANSITION:
+                    clr = plut.default_color(i)
+                plt.plot(xspan, k, color=clr, label=one_label(lbl), linewidth=lw) #, label=one_label(label))
+
+        elif is_extremum(f) or is_minimum(f):
+            #continue
+            k = 1. / f.r * f.sign
+            xspan = x[f.anchors[0]:f.anchors[1]+1]
+
+            label = 'abs maxima'
+            #clr = 'r'
+            if is_minimum(f):
+                label = 'abs minima'
+                #clr = 'b'
+
+            if plot:
+                plt.plot(xspan, np.ones(len(xspan))*k, color=clr, label=one_label(label), linewidth=lw)
+
+        if f.type != FEATURE_TRANSITION and f.r != np.inf:
+            if (transitions and is_potential_inflection(transitions[0])):
+                infl = None
+                for ft in transitions:
+                    s0, s1 = ft.data['s']
+                    a, b = ft.anchors
+                    if np.sign(s1) != np.sign(s0):
+                        infl_t = abs(s0) / abs(s1 - s0)
+                        infl = a + int(infl_t * ((b-a)%P.shape[1]))
+                        #pdb.set_trace()
+                        break
+                if infl is None and len(transitions) > 1:
+                    for ft1, ft2 in zip(transitions, transitions[1:]):
+                        s0 = ft1.data['s'][0]
+                        s1 = ft2.data['s'][1]
+                        a = ft1.anchors[0]
+                        b = ft2.anchors[1]
+
+                        if np.sign(s1) != np.sign(s0):
+                            infl = ft1.anchors[1]
+                            #infl_t = abs(s0) / abs(s1 - s0)
+                            #infl = int(infl_t * (b-a))
+                            break
+                if infl is not None:
+                    if closed:
+                        infl = infl%P.shape[1]
+                    P1 = get_contour_segment(P, transitions[0].anchors[0], infl, closed)
+                    P2 = get_contour_segment(P, infl, transitions[-1].anchors[1], closed)
+                    Pp = np.hstack([P1, P2])
+                    L1 = geom.chord_length(P1)
+                    L2 = geom.chord_length(P2)
+                    if min(L1, L2)/(L1 + L2) > 0.2 and not  is_segment_straight(Pp, ds, tol=0.1):
+                        if plot:
+                            plut.draw_marker([x[infl], 0], 'r', markersize=3, marker='x')
+                        inflections.append((infl, Pp))
+                transitions = []
+                # if np.sign(s1) != np.sign(s0):
+                #     infl_t = abs(s0) / abs(s1 - s0)
+                #     infl = int(infl_t * (b-a))
+                #     #k0,k1 = s0s1_to_kappa(P, a, b, s0, s1)
+
+                #     plut.draw_marker([x[infl], 0], 'r')
+                #     print('infl')
+                #     inflections.append(infl)
+            is_trans = False
+    if get_start:
+        return inflections, kappa.size
+    return inflections
+
+
+def estimate_inflections(P, features, closed, plot=False, lw=0.5):
+    kappa = geom.curvature(P, closed=closed)
+    x = np.linspace(0, kappa.size-1, kappa.size)
+    if plot:
+        plt.plot(x, kappa, 'k:', alpha=0.5, label='curvature', linewidth=0.5)
+    ds = np.mean(geom.chord_lengths(P))
+
+    is_trans = False
+    inflections = []
+    transitions = []
+
+    potential_inflections = []
+    m = len(features)
+    count = m
+    if closed:
+        count = count+1
+    prev_f = None
+    transition_span = []
+    for i in range(count):
+        f = features[i%m]
+        if prev_f is None and is_extremum(f):
+            prev_f = f
+            continue
+        if f.type == FEATURE_TRANSITION and prev_f is not None:
+            transition_span.append(f)
+            continue
+        if is_minimum(f):
+            transition_span = []
+            prev_f = None
+            continue
+        if (is_extremum(f) and
+            prev_f is not None):
+            if prev_f.sign != f.sign and transition_span:
+                potential_inflections.append((transition_span, prev_f, f))
+            transition_span = []
+            prev_f = f
+
+    for transitions, f1, f2 in potential_inflections:
+        infl = None
+                #pdb.set_trace()
+        for ft in transitions:
+            s0, s1 = ft.data['s']
+            a, b = ft.anchors
+            if np.sign(s1) != np.sign(s0):
+                #pdb.set_trace()
+                infl_t = abs(s0) / (abs(s1) + abs(s0))
+                infl = a + int(infl_t * (b-a))
+                break
+        if infl is None and len(transitions) > 1:
+            for ft0, ft1 in zip(transitions, transitions[1:]):
+                s0 = ft0.data['s'][0]
+                s1 = ft1.data['s'][1]
+
+                if np.sign(s0) != np.sign(s10):
+                    infl = ft0.anchors[1]
+                    #infl_t = abs(s0) / abs(s1 - s0)
+                    #infl = int(infl_t * (b-a))
+                    break
+        if infl is not None:
+            P1 = get_contour_segment(P, f1.i, infl, closed)
+            P2 = get_contour_segment(P, infl, f2.i, closed)
+            Pp = np.hstack([P1, P2])
+            L1 = geom.chord_length(P1)
+            L2 = geom.chord_length(P2)
+            if min(L1, L2)/(L1 + L2) > 0.1 and not is_segment_straight(Pp, ds, tol=0.5, debug_draw=False):
+                if plot:
+                    plut.draw_marker([x[infl], 0], 'r')
+                inflections.append(infl)
+    return inflections
 ##################################################
 # SALIENCY
 
-def discard_unsalient(features, P, closed): 
+def discard_unsalient(features, P, closed, only_minima=False): 
     ''' Merge features based on given disk overlap metric'''
     n = len(features)  
     start = 0 
@@ -1332,14 +1927,26 @@ def discard_unsalient(features, P, closed):
         f = features[i]
         # if is_minimum(f):
         #     pdb.set_trace()
-        d = compute_depth_saliency(P, fprev, f, fnext, closed) 
+        d = compute_depth_saliency(P, fprev, f, fnext, closed)
+        if np.isnan(d):
+            d = 10
+            #continue
+        
         thresh = cfg.feature_saliency_thresh
+        
+        if only_minima and not is_minimum(f):
+            salient_features.append(f)
+            continue
+
+        r_thresh = cfg.r_thresh
 
         if is_minimum(f):
+            r_thresh = cfg.minima_r_thresh
             thresh = cfg.minima_saliency_thresh
             
             print('Min saliency = ' + str(d))
-        if d >= thresh: #cfg.feature_saliency_thresh:
+            
+        if d >= thresh and f.r < r_thresh: #cfg.feature_saliency_thresh:
             salient_features.append(f)
     
     if not closed:
@@ -1457,13 +2064,13 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     if f0.i == f2.i: # loop case
         Pv = get_contour_segment(P, f0.i, (f2.i)%n, closed) 
         Pv = Pv[:,:-1]
-        f = shift_feature(-f0.i, f1, P)
+        f = shift_feature(-f0.i, f1, P, closed)
         return Pv, f
     #endif
 
     a, b = left_right_support_anchors(P, f0, f1, f2, closed)
     Pv = get_contour_segment(P, a, b)
-    f = shift_feature(-a, f1, P)
+    f = shift_feature(-a, f1, P, closed)
 
     if len(Pv.shape) < 2:
         return np.zeros((2,0)), f #Invalid
@@ -1471,11 +2078,13 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     return Pv, f
 #endf
 
-def compute_depth_saliency(P, f0, f1, f2, closed=True, debug_draw=False):
+def compute_depth_saliency(P, f0, f1, f2, closed=True, debug_draw=False, get_area=False):
+    #if is_minimum(f1):
+    #    debug_draw=True
     Pv, f = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed) 
     if Pv.shape[1] < 3:
         return 0
-    return compute_depth_saliency_contour(P, Pv, f, debug_draw)
+    return compute_depth_saliency_contour(P, Pv, f, debug_draw, get_area)
 
 def angle_bisector(A, B, C):
     dc = B - A
@@ -1487,7 +2096,7 @@ def angle_bisector(A, B, C):
                 ((b+c)**2 - a**2))
     return geom.normalize((dc/c + db/b))*d
 
-def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False):
+def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False, get_area=False):
     a, b = Pv[:,0], Pv[:,-1]
     r = f.r
 
@@ -1508,21 +2117,48 @@ def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False):
     else:
         m = max(L.shape[1], R.shape[1])
 
-    for i in range(m):
-            
-        pl = L[:,min(i, L.shape[1]-1)]
-        pr = R[:,min(i, R.shape[1]-1)]
+    extremities = []
 
+    # Simple polygon heuristic
+    prev = None
+    maxl = L.shape[1]-1
+    maxr = R.shape[1]-1
+    for i in range(m):
+        il = min(i, maxl)
+        ir = min(i, maxr)
+        pl = L[:,il]
+        pr = R[:,ir]
+
+        if prev is not None and cfg.only_simple_areas:
+            if il < maxl and geom.segment_intersection(pl, pr, prev[0], p)[0]:
+                break
+            if ir < maxr and geom.segment_intersection(pl, pr, prev[1], p)[0]:
+                break
+        prev = (pl, pr)
+
+        extremities.append((il, ir))
         #h = geom.point_segment_distance(p, pl, pr)
-        h = norm(angle_bisector(p, pl, pr)) 
+        h = norm(angle_bisector(p, pl, pr)) # TODO consider using bisector here
         if curvature_sign(pl, p, pr) != f.sign:
             h = -h
+        if np.isnan(h):
+            h = -10
         H.append(h)
         segs.append((pl, pr))
+
     
     #pdb.set_trace()
+    #if is_minimum(f):
+    #    pdb.set_trace()
+        
     i = np.argmax(H)
-    if i > 0 and debug_draw and f.sign < 0:
+
+    # Construct the contour area for saliency
+    start_area = f.anchors[0]-extremities[i][0]
+    end_area = f.anchors[1]+extremities[i][1]
+    area_poly = Pv[:,start_area:end_area+1]
+
+    if i > 0 and debug_draw: # and f.sign < 0:
         for j in range(m): #i):
             if j%2:
                 continue
@@ -1541,12 +2177,15 @@ def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False):
         #ph = geom.project(p, pl, pr)
         plut.draw_line(ph, p, 'r', linewidth=0.5)
 
+        plut.fill_poly(area_poly, 'c', alpha=0.3)
         # plut.stroke_poly(P1o, plut.colors.cyan, closed=False, linewidth=1.5, alpha=alpha)
         # plut.stroke_poly(P2o, 'm', closed=False, linewidth=1.5, alpha=alpha)
 
     w = np.exp(-r/h)     
-    
-    return w
+    if get_area:
+        return w, area_poly
+    else:
+        return w
 
 
 compute_depth_saliency_contour = compute_depth_saliency_contour_max_h
@@ -1684,6 +2323,9 @@ def draw_reconstruction(features, P, closed=False, labels=True, inflections=True
     '''
     #print('drawing recons')
     #print(type(features[0]))
+    if not features:
+        return
+
     if type(features[0]) == list:
         S = P
         feature_list = features
@@ -1694,23 +2336,32 @@ def draw_reconstruction(features, P, closed=False, labels=True, inflections=True
             feature_list_extended += [draw_reconstruction(features, P, labels=labels, inflections=inflections, skip_types=skip_types, linewidth=linewidth)]
         return feature_list_extended
 
+
+
     # Check if we need the additional info
     needs_features = True
+    needs_angles = True
     for f in features:
         if 'theta' in f.data:
+            needs_angles = False
+        
+        if f.type==FEATURE_TRANSITION:
             needs_features = False
-            break
-    
+            #break
+
     if P.shape[1] < 3:
         return
-    
-    if needs_features:
+
+    if needs_angles:
         features = compute_internal_angles(features, P)
+        
+    if needs_features:
         features = compute_transitions(features, P, closed)
+        
     m = len(features)
     
     labels_rec={}
-    linewidths={'M+':linewidth,'m-':linewidth, 'm+':linewidth/2, 'M-':linewidth/2, 'inflection':linewidth/2, 'transition':linewidth/2}
+    linewidths={'M+':linewidth,'m-':linewidth, 'm+':linewidth, 'M-':linewidth, 'inflection':linewidth/2, 'transition':linewidth/2}
     
     debug_feats = [(i,f) for i,f in enumerate(features) if f.type == FEATURE_INFLECTION]
     
@@ -1733,7 +2384,8 @@ def draw_reconstruction(features, P, closed=False, labels=True, inflections=True
             pts = es.euler_spiral(P[:,f.anchors[0]], P[:,f.anchors[1]], s0, s1, 100)
             if f.type == FEATURE_INFLECTION:
                 plut.draw_marker(P[:,f.i], 'g', markersize=linewidth*3, marker='o') #, label='inflections' if labels else '')
-
+            
+            
             #pts = np.vstack([P[:,f1.anchors[1]], P[:,f2.anchors[0]]]).T
         elif f.type != FEATURE_ENDPOINT:
             # Need to set data first (compute_internal_angles)
@@ -1757,6 +2409,8 @@ def draw_reconstruction(features, P, closed=False, labels=True, inflections=True
             label = ''
         labels_rec[f.type] = 1
         clr = feature_colors[f.type]
+        if f.type == FEATURE_TRANSITION:
+            clr = plut.default_color(i)
         lw = 1.
         if f.type in linewidths:
             lw = linewidths[f.type]
@@ -1767,99 +2421,10 @@ def draw_reconstruction(features, P, closed=False, labels=True, inflections=True
     # endfor
     return features
     
-##########################################
-# Internal utilities for debugging
-def debug_skeleton(MA):
-    plt.cla()
-    plt.figure(figsize=(8,8))
-    plut.stroke_shape(MA.graph['shape'], 'k')
-    vma.draw_skeleton(MA)
-    plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
-
-def debug_forks(MA, forks):
-    plt.cla()
-    plt.figure(figsize=(8,8))
-    plut.stroke_shape(MA.graph['shape'], 'k')
-    vma.draw_skeleton(MA)
-    disks = MA.graph['disks']
-    for n in MA.nodes():
-        if MA.degree(n) > 2:
-            plut.stroke_circle(disks[n].center, disks[n].r, 'r')
-    plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
-
-def debug_draw_part(P, Pv, MA, E, I):
-    ''' debug draw part of the local MA'''
-    if E:
-        vma.draw_skeleton(MA)
-        disks = MA.graph['disks']
-        for e in E:
-            #plut.fill_circle(disks[e].center, 2, 'c', alpha=1.)
-            plut.stroke_circle(disks[e].center, disks[e].r, 'c', alpha=1.)
-
-    if I:
-        plt.plot(P[0,I], P[1,I], 'ro', markersize=5)
-    plut.stroke_poly(P, [0.4, 0.4, 0.4, 1.], linewidth=0.5, linestyle=':')
-    plut.stroke_poly(Pv, 'k', linewidth=2, closed=False)
-
-def debug_features(P, features):
-    plt.cla()
-    plt.figure(figsize=(6,6))
-    plt.plot(P[0,:], P[1,:], 'k')
-    for f in features:
-        if is_extremum(f):
-            plut.stroke_circle(f.center, f.r, 'r' if f.sign < 0 else 'b')
-            plut.fill_circle(P[:,f.anchors[0]], 0.25, 'r')
-            plut.fill_circle(P[:,f.anchors[1]], 0.25, 'g')
-        else:
-            plut.fill_circle(f.center, 0.5, 'r') # if f.sign < 0 else 'b')
-    plt.axis('equal')
-    plt.show()
-
-
-def debug_feature(P, Pv, f):
-    plt.cla()
-    plt.figure(figsize=(6,6))
-    plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
-    plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
-    plut.stroke_circle(f.center, f.r, 'c')
-    plut.draw_marker(Pv[:,f.i], 'go')
-    
-    #plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
-    plut.show()
-#endf
-
-def debug_feature_local(P, Pv, f):
-    plt.cla()
-    plt.figure(figsize=(6,6))
-    #plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
-    plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
-    plut.stroke_circle(f.center, f.r, 'c')
-    plut.draw_marker(Pv[:,f.i], 'go')
-    
-    #plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
-    plut.show()
-#endf
-    
-def debug_stroke_poly(P, Pv):
-    plt.cla()
-    plt.figure(figsize=(6,6))
-    plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
-    plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
-    plut.show()
-#endf
-
-def debug_point(P, p):
-    plt.cla()
-    plt.figure(figsize=(6,6))
-    plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
-    plut.fill_circle(p, 10, 'r')
-    #plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
-    plut.show()
-#endf
 
 #######################################
 # ABSOLUTE MINIMA
-
+# Note: This code is not needed for font segmentation
 
 def compute_local_minima(P, ds, features, closed=True, draw_steps=False, P_whole=None):
     ''' Compute extrema for each part defined between two extrema with the same sign'''
@@ -1893,13 +2458,16 @@ def compute_local_minima(P, ds, features, closed=True, draw_steps=False, P_whole
             I = [f.i for f in local]
             plt.plot(I, K[I], 'ro')
             plt.plot()
-        if local:                      
-            local = [shift_feature(zone[0], f, P) for f in local]
+        if local:
+            #pdb.set_trace()
+            local = [shift_feature(zone[0], f, P, closed) for f in local]
+
             res += local
     
     return res 
     
 def get_pisa_point(P, a, b, center, r, neg=False):
+    ''' Get PISA point given a disk and its generating points'''
     #http://mathnews.uwaterloo.ca/wp-content/uploads/2014/08/v111i6.pdf
     # From Dot product finds arc midpoint
     pa = P[:,a]
@@ -1914,6 +2482,7 @@ def get_pisa_point(P, a, b, center, r, neg=False):
 
 
 def straight_line_mse(xy, reg=1e-5, debug_draw=False):
+    ''' Returns mean squared error for a straight line fit'''
     from numpy.linalg import inv
 
     flip = False
@@ -1942,8 +2511,12 @@ def straight_line_mse(xy, reg=1e-5, debug_draw=False):
 
 
 def linear_esat_disks(Pv):
-    Pv = geom.smoothing_spline(Pv.shape[1], Pv, smooth_k=cfg.minima_smooth_k)
+    ''' Linear approximation of Layton's ESAT. '''
 
+    Pv = geom.smoothing_spline(Pv.shape[1], Pv, smooth_k=cfg.minima_smooth_k)
+    #Pv = geom.gaussian_smooth_contour(Pv, cfg.minima_smooth_sigma, closed=False)
+
+    # Farthest Voronoi
     vor = vma.voronoi_diagram(Pv, True)
     #vma.draw_voronoi(vor, np.ones(3)*0.5)
 
@@ -1989,18 +2562,25 @@ def linear_esat(Pv):
     G.graph['points'] = np.array(Pv.T)
     return G
 
-def is_segment_straight(P, ds, start_feature, end_feature, closed):
-    a, b = start_feature.anchors[1],  end_feature.anchors[0]
-    Pv = get_contour_segment(P, a, b, closed=closed) 
+def is_segment_straight(Pv, ds, tol=None, debug_draw=False):
+    ''' Tests straightness of a contour segment with a least squares line fit'''
     if Pv.shape[1] < 4:
         return True
-    mse = straight_line_mse(Pv)
-    straight = mse < (cfg.straightness_tolerance*ds)**2
+    if tol is None:
+        tol = cfg.straightness_tolerance
+    mse = straight_line_mse(Pv, debug_draw=debug_draw)
+    straight = mse < (tol*ds)**2
 
     if straight:
-        print((mse, (cfg.straightness_tolerance*ds)**2))
+        print((mse, (tol*ds)**2))
         #plut.stroke_poly(Pv, 'r', linewidth=3., closed=False)
     return straight
+
+def is_contour_segment_straight(P, ds, start_feature, end_feature, closed, debug_draw=False):
+    ''' Tests straightness of support segment'''
+    a, b = start_feature.anchors[1],  end_feature.anchors[0]
+    Pv = get_contour_segment(P, a, b, closed=closed) 
+    return is_segment_straight(Pv, ds, debug_draw=debug_draw)
 
 def compute_segment_minima(P, ds, start_feature, end_feature, closed, draw_steps=False):
     ''' Compute absolute minima for a part of the contour defined between two features'''
@@ -2014,13 +2594,13 @@ def compute_segment_minima(P, ds, start_feature, end_feature, closed, draw_steps
     if is_endpoint(start_feature) or is_endpoint(end_feature):
         return [], P, (0,0)
     
-    if is_segment_straight(P, ds, start_feature, end_feature, closed):
+    if is_contour_segment_straight(P, ds, start_feature, end_feature, closed, debug_draw=draw_steps):
         print('Straight segment')
         
         return [], P, (0,0)
     
     a, b = start_feature.i,  end_feature.i
-    #a, b = start_feature.i,  end_feature.i #start_feature.anchors[1],  end_feature.anchors[0]
+    a, b = start_feature.anchors[1],  end_feature.anchors[0]
 
     #a, b = start_feature.anchors[0],  end_feature.anchors[1]
     
@@ -2038,6 +2618,11 @@ def compute_segment_minima(P, ds, start_feature, end_feature, closed, draw_steps
     
     Pv = get_contour_segment(P, a, b, closed=closed) #i, end_feature.i+1) #
     (da, db), Pv_smooth = linear_esat_disks(Pv)
+
+    if draw_steps:
+        plut.plot(Pv, 'c')
+        plut.plot(Pv_smooth, 'm', linewidth=2.)
+
     if da is None:
         print('No ESAT disks')
         return [], P, (0,0)
@@ -2058,9 +2643,12 @@ def compute_segment_minima(P, ds, start_feature, end_feature, closed, draw_steps
     # Compute limits to avoid contact region overlaps
     limit_a = (start_feature.anchors[1] - start_feature.i)%n
     limit_b = (end_feature.i - end_feature.anchors[0])%n
+    #limit_a = (start_feature.anchors[1] - start_feature.i)%n
     #pdb.set_trace()
     limits = (limit_a, Pv_smooth.shape[1]-limit_b)
     f = expand_and_recompute_midpoint(Pv_smooth, f, closed=False, thresh=ds*cfg.minima_expansion_tol, limits=limits) #ds*2)
+    if draw_steps:
+        plut.fill_circle(Pv_smooth[:,f.i], 4, 'r')
     return [f], Pv, (a,b)
 
 
@@ -2073,7 +2661,7 @@ def compute_segment_minima_OLDDD(P, ds, start_feature, end_feature, closed, draw
         plut.stroke_circle(start_feature.center, start_feature.r, 'c', linewidth=0.5)
         plut.stroke_circle(end_feature.center, end_feature.r, 'c', linewidth=0.5)
     
-    if is_segment_straight(P, ds, start_feature, end_feature, closed):
+    if is_contour_segment_straight(P, ds, start_feature, end_feature, closed):
         return [], P, (0,0)
 
     a, b = start_feature.i+1,  end_feature.i-1 
@@ -2147,12 +2735,14 @@ def compute_segment_minima_OLDDD(P, ds, start_feature, end_feature, closed, draw
     f = f._replace(i=int(ratio*f.i), anchors=sort_anchors((int(ratio*f.anchors[0]), int(ratio*f.anchors[1])), Pv, closed=False))
     dists = [np.linalg.norm(p - pisap) for p in Pv.T]
     f = f._replace(i=np.argmin(dists))    
-    
-    if is_minimum(f): 
+
+    r_thresh = cfg.r_thresh
+
+    if is_minimum(f):
+        r_thresh = cfg.minima_r_thresh
+
+    if f.r < r_thresh:
         features_ok = [f]
-    else:
-        if f.r < cfg.r_thresh:
-            features_ok = [f]
     
     if features_ok and draw_steps:
         plt.plot(Pv_smooth[0,:], Pv_smooth[1,:], 'b')
@@ -2199,7 +2789,7 @@ def compute_local_inflections(P, ds, features, closed=True, draw_steps=False, P_
                 plt.plot(I, K[I], 'ro')
                 plt.plot()
             if local:                      
-                local = [shift_feature(zone[0], f, P) for f in local]
+                local = [shift_feature(zone[0], f, P, closed) for f in local]
                 res += local
     
     return res 
@@ -2222,8 +2812,7 @@ def compute_segment_inflection(P, ds, start_feature, end_feature, closed, draw_s
     if draw_steps:
         plut.stroke_circle(start_feature.center, start_feature.r, 'm')
         plut.stroke_circle(end_feature.center, end_feature.r, 'm')
-    
-    
+
     #a, b = start_feature.i,  end_feature.i #start_feature.anchors[1],  end_feature.anchors[0]
     a, b = start_feature.anchors[1],  end_feature.anchors[0]
     #a, b = start_feature.i,  end_feature.i
@@ -2550,7 +3139,6 @@ def intersect_last(P):
             
             return i+1
     return -1
-
 
 def dynamic_symmetry_extrema(P, closed=False):
     ''' DEPRECATED. Path based extrema/features computation. 
@@ -2912,7 +3500,6 @@ def compute_depth_saliency_simple(P, Pv, f, debug_draw=False):
     w = np.exp(-r/h)
     return w
 
-
 def isoperimetric_quotient(X):
     P = geom.chord_length(X, closed=True)
     A = abs(geom.polygon_area(X))
@@ -2921,47 +3508,105 @@ def isoperimetric_quotient(X):
 def object_angle_importance(theta, scale=10.):
     return scale / (np.cos(theta/2)) - scale
 
-def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
-    from autograff.geom.shapely_wrap import parallel_offset
-    
+def parallel_offset_open(P, o):
+    if P.shape[1] < 2:
+        return P
+    N = geom.normals_2d(P, vertex=True)
+    return P + N*o
+
+def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False, draw_flags={}):
+    #from autograff.geom.shapely_wrap import parallel_offset
+    def draw_flag(f):
+        if not f in draw_flags:
+            return True
+        return draw_flags[f]
+
     if not is_minimum(f) and not is_extremum(f):
+        #if f.type == FEATURE_INFLECTION:
+        #    plut.draw_marker(f.pos, 'ro')
         return
-    
+    if f.r > 1000:
+        return
     contact = f.data['contact']
     support = f.data['support']
     pos = f.data['extremum']
 
     #offset = 0 #signs[i%2]*14.
-    
+    #pdb.set_trace()
+    draw_axis = draw_axis or ('axis' in draw_flags and draw_flags['axis'])
     if draw_axis:
         if f.data['MA'] is not None:
             vma.draw_skeleton(f.data['MA'], clr=clr)
         plut.draw_line(f.center, pos, clr, linewidth=linewidth*0.5, linestyle=':')
-    
-    plut.fill_circle(f.center, f.r, clr, alpha=0.15)
-    plut.stroke_circle(f.center, f.r, clr, linewidth=linewidth*0.25)
+
+    if draw_flag('osculating'):
+        plut.fill_circle(f.center, f.r, clr, alpha=0.15, zorder=-100)
+        plut.stroke_circle(f.center, f.r, clr, linewidth=linewidth*0.25, zorder=-20)
+
     if draw_axis:
         plut.draw_line(f.center, contact[:,0], np.ones(3)*0.5, linewidth=linewidth*0.5, linestyle=':')
         plut.draw_line(f.center, contact[:,-1], np.ones(3)*0.5, linewidth=linewidth*0.5, linestyle=':')
-    plut.fill_circle(f.center, linewidth*3, 'k')
-    
-    
-    left = parallel_offset(support[0], -offset)
-    right = parallel_offset(support[1], offset)
-    contact = parallel_offset(contact, offset)
-    plut.fill_circle(pos, linewidth*5, 'r', zorder=1000)
+
+    if draw_flag('osculating_center'):
+        plut.fill_circle(f.center, linewidth, 'k')
+
+    # There is no need for an offset if we don't have overlapping support segs.
+    if not draw_flag('support'):
+        offset = 0
+
+    try:
+        left = parallel_offset_open(support[0], -offset)
+        right = parallel_offset_open(support[1], offset)
+        contact = parallel_offset_open(contact, offset)
+    except ValueError:
+        return
+
+    if draw_flag('extremum'):
+        if is_extremum(f): #f.sign < 0:
+            plut.fill_circle(pos, linewidth*2, 'r', zorder=1000)
+        else:
+            plut.fill_circle(pos, linewidth*2, 'b', zorder=1000)
     if type(left)==list:
         left = np.hstack(left)
     if type(right)==list:
         right = np.hstack(right)
     if type(contact)==list:
         contact = np.hstack(contact)
-        
-    plut.stroke_poly(left, clr, closed=False, linewidth=linewidth*1.5, alpha=0.5)
-    plut.stroke_poly(right, clr, closed=False, linewidth=linewidth*1.5, alpha=0.5)
-    plut.stroke_poly(contact, clr, closed=False, linewidth=linewidth*1., linestyle=':')
-    plut.stroke_poly(contact, 'k', closed=False, linewidth=linewidth*2.)
 
+    if draw_flag('support'):
+        plut.stroke_poly(left, clr, closed=False, linewidth=linewidth*1.5, alpha=0.5)
+        plut.stroke_poly(right, clr, closed=False, linewidth=linewidth*1.5, alpha=0.5)
+        plut.stroke_poly(contact, clr, closed=False, linewidth=linewidth*1., linestyle=':')
+    if draw_flag('contact'):
+        plut.stroke_poly(contact, 'k', closed=False, linewidth=linewidth*2.)
+
+def draw_CSFs(features,
+            clr=None,
+            linewidth=1,
+            draw_axis=False,
+            count=0,
+            offset=0,
+            draw_flags={},
+            only=None):
+    if features and type(features[0])==list:
+        k = 0
+        for fts in features:
+            k = draw_CSFs(fts, clr, linewidth, draw_axis, k, offset, draw_flags)
+        return k
+    
+    k = count
+    o = [offset, -offset]
+    for i, f in enumerate(features):
+        if is_endpoint(f):
+            continue
+        if only is not None and not i in only:
+            continue
+        c = clr
+        if c is None:
+            c = plut.default_color(k)
+        draw_CSF(f, c, linewidth=linewidth, draw_axis=draw_axis, offset=o[k%2], draw_flags=draw_flags)
+        k += 1
+    return k
 
 def arc_points(a, b, theta, subd=100):
     ''' Get points of an arc between a and b, 
@@ -2989,5 +3634,92 @@ def arc_points(a, b, theta, subd=100):
     arc = np.tile(cenp.reshape(-1,1), (1,subd)) + np.vstack([np.cos(A), np.sin(A)]) * r
     return arc
 
+##########################################
+# Internal utilities for debugging
+def debug_skeleton(MA):
+    plt.cla()
+    plt.figure(figsize=(8,8))
+    plut.stroke_shape(MA.graph['shape'], 'k')
+    vma.draw_skeleton(MA)
+    plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
+
+def debug_forks(MA, forks):
+    plt.cla()
+    plt.figure(figsize=(8,8))
+    plut.stroke_shape(MA.graph['shape'], 'k')
+    vma.draw_skeleton(MA)
+    disks = MA.graph['disks']
+    for n in MA.nodes():
+        if MA.degree(n) > 2:
+            plut.stroke_circle(disks[n].center, disks[n].r, 'r')
+    plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
+
+def debug_draw_part(P, Pv, MA, E, I):
+    ''' debug draw part of the local MA'''
+    if E:
+        vma.draw_skeleton(MA)
+        disks = MA.graph['disks']
+        for e in E:
+            #plut.fill_circle(disks[e].center, 2, 'c', alpha=1.)
+            plut.stroke_circle(disks[e].center, disks[e].r, 'c', alpha=1.)
+
+    if I:
+        plt.plot(P[0,I], P[1,I], 'ro', markersize=5)
+    plut.stroke_poly(P, [0.4, 0.4, 0.4, 1.], linewidth=0.5, linestyle=':')
+    plut.stroke_poly(Pv, 'k', linewidth=2, closed=False)
+
+def debug_features(P, features):
+    plt.cla()
+    plt.figure(figsize=(6,6))
+    plt.plot(P[0,:], P[1,:], 'k')
+    for f in features:
+        if is_extremum(f):
+            plut.stroke_circle(f.center, f.r, 'r' if f.sign < 0 else 'b')
+            plut.fill_circle(P[:,f.anchors[0]], 0.25, 'r')
+            plut.fill_circle(P[:,f.anchors[1]], 0.25, 'g')
+        else:
+            plut.fill_circle(f.center, 0.5, 'r') # if f.sign < 0 else 'b')
+    plt.axis('equal')
+    plt.show()
+
+
+def debug_feature(P, Pv, f):
+    plt.cla()
+    plt.figure(figsize=(6,6))
+    plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
+    plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
+    plut.stroke_circle(f.center, f.r, 'c')
+    plut.draw_marker(Pv[:,f.i], 'g')
+    plut.show()
+#endf
+
+def debug_feature_local(P, Pv, f):
+    plt.cla()
+    plt.figure(figsize=(6,6))
+    #plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
+    plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
+    plut.stroke_circle(f.center, f.r, 'c')
+    plut.draw_marker(Pv[:,f.i], 'go')
+
+    #plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
+    plut.show()
+#endf
+
+def debug_stroke_poly(P, Pv):
+    plt.cla()
+    plt.figure(figsize=(6,6))
+    plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
+    plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
+    plut.show()
+#endf
+
+def debug_point(P, p):
+    plt.cla()
+    plt.figure(figsize=(6,6))
+    plut.stroke_poly(P, 'k', closed=False, alpha=0.4)
+    plut.fill_circle(p, 10, 'r')
+    #plut.stroke_poly(Pv, 'r', closed=False, linewidth=2.)
+    plut.show()
+#endf
 
 #%%
