@@ -773,7 +773,7 @@ def draw_shape(shape):
     plut.fill_stroke_shape(shape, np.ones(3)*0.95, np.ones(3)*0.25, linewidth=0.5) # alpha=0.5) #, linestyle=':')
     
 def draw_shape_and_skeleton(MA, draw_spokes=False, draw_forks=False, convexities=False, draw_areas=False, markersize=7, skel_alpha=1, features=True):
-    plut.fill_stroke_shape(MA.graph['shape'], np.ones(3)*0.95, np.ones(3)*0.25, linewidth=0.5) # alpha=0.5) #, linestyle=':')
+    plut.fill_stroke_shape(MA.graph['shape'], np.ones(3)*0.95, np.ones(3)*0.25, linewidth=0.5, zorder=-2000) # alpha=0.5) #, linestyle=':')
     vpos = MA.graph['vpos']
     disks = MA.graph['disks']
     draw_skeleton(MA, alpha=skel_alpha)
