@@ -29,7 +29,7 @@ cfg.add("num_sym_passes", 3, "Max passes for csf ")
 cfg.add("debug_draw", False, "debug draw")
 
 cfg.add("smoothing", 0.0, "input smoothing window")
-cfg.add("anchor_expansion_tol", 0.01, "annulus tolerance for terminal disks (was 0.05)")
+cfg.add("anchor_expansion_tol", 0.0, "annulus tolerance for terminal disks (was 0.05)")
 cfg.add("minima_expansion_tol", 0.05, "annulus for minima")
 
 cfg.add("refine_clothoid_fit", True, "Least squares clothoid fit refinement")
