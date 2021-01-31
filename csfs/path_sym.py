@@ -38,6 +38,8 @@ from . import voronoi_skeleton as vma
 from . import config as config
 reload(config)
 
+brk = pdb.set_trace
+
 # Configuration (shared)
 cfg = config.cfg 
 
@@ -63,12 +65,13 @@ SUPPORT_ALTERNATE = 0
 SUPPORT_EXTREMA = 1
 SUPPORT_INTERPOLATED = 2
 SUPPORT_CONTACT = 3
+SUPPORT_ALL = 4
 
 # Support.
 # Saliency support type is used for saliency computations
 # Generator support type is used to generate local axes and for recursive computation
 # The values set here are finalized. Do not change
-cfg.saliency_support_type = SUPPORT_EXTREMA #ALTERNATE #EXTREMA
+cfg.saliency_support_type = SUPPORT_ALL #SUPPORT_ALL #SUPPORT_EXTREMA #SUPPORT_ALL # #ALTERNATE #EXTREMA
 cfg.generator_support_type = SUPPORT_CONTACT
 cfg.shortest_support_only = False # <- if True max saliency computation stops when it reaches the shortest segment
 cfg.cut_axis_segments = False # <- cuts axis segments at first support end
@@ -1379,6 +1382,7 @@ def compute_local_maxima(P, ds, features, closed=True, draw_steps=False, P_whole
     return res 
 
 def discard_nested_feature(P, f, f1, f2):
+    # pdb.set_trace()
     o1 = geom.circle_overlap(f.center, f.r, f1.center, f1.r)
     o2 = geom.circle_overlap(f.center, f.r, f2.center, f2.r)
     if o1 > cfg.merge_thresh and f.r > f1.r and f1.sign == f.sign:
@@ -1954,6 +1958,39 @@ def discard_unsalient(features, P, closed, only_minima=False):
 
     return salient_features
 
+def consolidate_support(P, a, b, f0, f1, f2, closed, support_type):
+    n = P.shape[1]
+
+    # For minima always use support up to extremum
+    if support_type != SUPPORT_ALL:
+        if closed:
+            b = b%n
+        else:
+            b = min(b, n-1)
+
+        if is_minimum(f0):
+            a = f0.i
+        if is_minimum(f2):
+            b = f2.i
+
+        # TODO: a bug happens where f1.anchor[0] < f0.anchor[1] second anchor of f0 extends a bit beyond
+        # the first anchor of f1 (the extrema for which we compute saliency)
+        # This is a ugly work around but this is probably due to a +1 in contact region commputation
+        if closed:
+            if (f1.i - f0.i)%n < (f1.anchors[0] - a)%n: # (f1.anchors[0] - a)%n > (a - f1.anchors[0])%n:
+                #pdb.set_trace()
+                a = f1.anchors[0]
+        else:
+            if (a > f1.anchors[0]):
+                #pdb.set_trace()
+                a = f1.anchors[0]
+
+        # Support around minimum goes up to extremum
+        if is_minimum(f1):
+            return f0.i, f2.i
+
+    return a, b
+
 def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
     a = f0.anchors[1]
     b = f2.anchors[0] 
@@ -1961,15 +1998,21 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
     #pdb.set_trace() 
     if support_type is None:
         support_type = cfg.saliency_support_type
-    
-    # Support around minimum goes up to extremum
-    if is_minimum(f1):
-        return f0.i, f2.i
 
     #pdb.set_trace()
     if support_type==SUPPORT_EXTREMA: # cfg.support_until_extrema:
         a = f0.i
-        b = f2.i 
+        b = f2.i
+    elif support_type==SUPPORT_CONTACT:
+        a = f0.anchors[1]
+        b = f2.anchors[0]
+    elif support_type==SUPPORT_ALL:
+        if not closed:
+            a = 0
+            b = n-1
+        else:
+            a = (f1.i - (n // 2))%n
+            b = (f1.i + (n // 2))%n
     elif support_type==SUPPORT_INTERPOLATED: # cfg.interpolate_support:
         if cfg.support_uses_distance:
             speed = cfg.interpolation_exp_rise
@@ -1998,9 +2041,6 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
                 b = f2.anchors[0] + int(t*d)
 
             #b = f2.i
-    elif support_type==SUPPORT_CONTACT:
-        a = f0.anchors[1]
-        b = f2.anchors[0] 
     elif support_type==SUPPORT_ALTERNATE:
         if f0.sign != f1.sign:
             a = f0.i
@@ -2011,40 +2051,7 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
         else:
             b = get_contour_midpoint_index(f1.i, f2.i, P, closed) #f2.anchors[0]
 
-    def inc(p, amt):
-        p = p + amt
-        if closed:
-            p = p%n
-        else:
-            if p < 0:
-                p = 0
-            if p >= n:
-                p = n-1
-        return p
-
-    if closed:
-        b = b%n
-    else:
-        b = min(b, n-1)
-        
-    # For minima always use support up to extremum
-    if is_minimum(f0):
-        a = f0.i
-    if is_minimum(f2):
-        b = f2.i
-
-    # TODO: a bug happens where f1.anchor[0] < f0.anchor[1] second anchor of f0 extends a bit beyond 
-    # the first anchor of f1 (the extrema for which we compute saliency)
-    # This is a ugly work around but this is probably due to a +1 in contact region commputation
-    if closed:
-        if (f1.i - f0.i)%n < (f1.anchors[0] - a)%n: # (f1.anchors[0] - a)%n > (a - f1.anchors[0])%n:
-            #pdb.set_trace()
-            a = f1.anchors[0]
-    else:
-        if (a > f1.anchors[0]):
-            #pdb.set_trace()
-            a = f1.anchors[0]
-    return a, b
+    return consolidate_support(P, a, b, f0, f1, f2, closed, support_type)
 
 def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     """Get support contour segment for a CSF given its neighboring CSFs  
@@ -2061,7 +2068,9 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     """
     n = P.shape[1]
 
-    if f0.i == f2.i: # loop case
+    #pdb.set_trace()
+
+    if f0.i == f2.i and cfg.saliency_support_type != SUPPORT_ALL: # loop case
         Pv = get_contour_segment(P, f0.i, (f2.i)%n, closed) 
         Pv = Pv[:,:-1]
         f = shift_feature(-f0.i, f1, P, closed)
@@ -2069,22 +2078,29 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     #endif
 
     a, b = left_right_support_anchors(P, f0, f1, f2, closed)
-    Pv = get_contour_segment(P, a, b)
-    f = shift_feature(-a, f1, P, closed)
+
+    Pv = get_contour_segment(P, a, b, closed=closed)
+    f0 = shift_feature(-a, f0, P, closed)
+    f1 = shift_feature(-a, f1, P, closed)
+    f2 = shift_feature(-a, f2, P, closed)
 
     if len(Pv.shape) < 2:
-        return np.zeros((2,0)), f #Invalid
-    f = f._replace(anchors=(f.anchors[0], min(f.anchors[1], Pv.shape[1]-1)))
-    return Pv, f
+        return np.zeros((2,0)), f0, f1, f2 #Invalid
+    # wat?
+    #f = f._replace(anchors=(f.anchors[0], min(f.anchors[1], Pv.shape[1]-1)))
+    return Pv, f0, f1, f2
 #endf
 
 def compute_depth_saliency(P, f0, f1, f2, closed=True, debug_draw=False, get_area=False):
     #if is_minimum(f1):
     #    debug_draw=True
-    Pv, f = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed) 
+    Pv, f0, f1, f2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
     if Pv.shape[1] < 3:
+        if get_area:
+            return 0, Pv
         return 0
-    return compute_depth_saliency_contour(P, Pv, f, debug_draw, get_area)
+    #return compute_depth_saliency_contour_max_h(P, Pv, f1, debug_draw, get_area)
+    return compute_depth_saliency_contour_all(P, Pv, f0, f1, f2, debug_draw, get_area)
 
 def angle_bisector(A, B, C):
     dc = B - A
@@ -2188,7 +2204,96 @@ def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False, get_area=Fa
         return w
 
 
-compute_depth_saliency_contour = compute_depth_saliency_contour_max_h
+def compute_depth_saliency_contour_all(P, Pv, fl, f, fr, debug_draw=False, get_area=False):
+
+    # traverse both sides of feature
+    #L = Pv[:, :f.anchors[0]+1][:,::-1]
+    #R = Pv[:, f.anchors[1]:]
+    a = fl.anchors[1]+1
+    b = fr.anchors[0]
+    L = Pv[:, :a][:,::-1]
+    R = Pv[:, b:]
+
+    H = []
+    segs = []
+    p = f.extrema_pos
+
+    # if L.shape[1] < 1:
+    #     L = Pv[:,f.anchors[0]].reshape(-1,1)
+    # if R.shape[1] < 1:
+    #     R = Pv[:,f.anchors[1]].reshape(-1,1)
+
+    extremities = []
+    endpoints = []
+    # Simple polygon heuristic
+    # each new segment connecting points must be longer than the previous
+    # and it should not intersect it
+    prev = None
+    maxl = L.shape[1]-1
+    maxr = R.shape[1]-1
+
+    m = max(L.shape[1], R.shape[1])
+
+    for i in range(m):
+        il = min(i, maxl)
+        ir = min(i, maxr)
+        pl = L[:,il]
+        pr = R[:,ir]
+
+        #pdb.set_trace()
+        extremities.append((il, ir))
+        endpoints.append((pl, pr))
+
+        if prev is not None:
+            if il < maxl and geom.segment_intersection(pl, pr, prev[0], p)[0]:
+                break
+            if ir < maxr and geom.segment_intersection(pl, pr, prev[1], p)[0]:
+                break
+            if geom.distance(*prev) > geom.distance(pl, pr):
+                break
+        prev = (pl, pr)
+
+
+        # #h = geom.point_segment_distance(p, pl, pr)
+        # h = norm(angle_bisector(p, pl, pr)) # TODO consider using bisector here
+        # if curvature_sign(pl, p, pr) != f.sign:
+        #     h = -h
+        # if np.isnan(h):
+        #     h = -10
+        # H.append(h)
+        # segs.append((pl, pr))
+
+    # Construct the contour area for saliency
+    start_area = a - extremities[-1][0]
+    end_area = b + extremities[-1][1]
+    area_poly = Pv[:,start_area:end_area+1]
+
+    pl, pr = endpoints[-1]
+    b = angle_bisector(p, pl, pr)
+    h = norm(b)
+    #plut.draw_line(p, p + b, 'b', linewidth=2.)
+    w = np.exp(-f.r/h)
+
+    area = abs(geom.polygon_area(area_poly))
+    disk_area = np.pi * f.r**2
+    w = np.exp(-disk_area/(2*area))
+
+    if debug_draw and f.sign < 0:
+        #pl, pr = segs[i]
+        #plut.draw_line(pl, pr, 'b', linewidth=0.5, linestyle=':') #[0,0.3,0,7])
+
+        #ph = p + angle_bisector(p, pl, pr)
+        #ph = geom.project(p, pl, pr)
+        #plut.draw_line(ph, p, 'r', linewidth=0.5)
+
+        plut.fill_poly(area_poly, 'c', alpha=0.3)
+        # plut.stroke_poly(P1o, plut.colors.cyan, closed=False, linewidth=1.5, alpha=alpha)
+        # plut.stroke_poly(P2o, 'm', closed=False, linewidth=1.5, alpha=alpha)
+
+    if get_area:
+        return w, area_poly
+    else:
+        return w
 
 ### Curvature and 'depth' based saliency, different variants below
 def saliency_depth(P, features, closed=True, debug_draw=False):
@@ -2968,7 +3073,7 @@ def saliency_compactness(P, features, closed=True):
         f2 = features[(i+1)%m]
 
         if is_extremum(f1):
-            X,f = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
+            X, f0, f, f2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
             pts.append(P[:,f1.i])
             saliency.append( isoperimetric_quotient(X) ) #abs(geom.angle_between(d1, d2) ) )#d / d2)
     return np.array(pts).T, np.array(saliency)
@@ -2987,7 +3092,7 @@ def saliency_stickout(P, features, closed=True):
         f2 = features[(i+1)%m]
 
         if True: #is_extremum(f1):
-            X, f = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
+            X, f0, f, f2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
             pts.append(P[:,f1.i])
             #d = np.linalg.norm(P[:,f0.anchors[1]] - P[:,f2.anchors[0]])
             #d2 = np.linalg.norm(P[:,f1.anchors[0]] - P[:,f1.anchors[1]])
@@ -3011,7 +3116,7 @@ def saliency_turning_angle(P, features, closed=True):
         f1 = features[i]
         f2 = features[(i+1)%m]
 
-        X, f = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
+        X, f0, f, f2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
 
         pts.append(P[:,f1.i])
         #d = np.linalg.norm(P[:,f0.anchors[1]] - P[:,f2.anchors[0]])
@@ -3046,7 +3151,7 @@ def shape_factor(P, features, i, closed):
     f0 = features[(i-1)%m]
     f2 = features[(i+1)%m]
     r = features[i].r
-    X, f = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
+    X, f0, f, f2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
     #print (f0.i, f1.i, f2.i), Pv.shape
     dists = [geom.point_line_distance(p, X[:,0], X[:,-1]) for p in X.T]
     #maxdist = np.max(dists)
