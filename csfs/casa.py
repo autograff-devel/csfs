@@ -213,7 +213,7 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
     #sym.cfg.anchor_thresh = cfg.anchor_expansion_tol*ds
     
     stats = {}
-    #brk()
+
     flags = 0
     if cfg.casa_has_minima:
         #pdb.set_trace()
@@ -871,8 +871,7 @@ def debug_skeleton(MA, forks=[]):
 #endf
 
 def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
-
-    from autograff.geom.shapely_wrap import parallel_offset
+    #from autograff.geom.shapely_wrap import parallel_offset
 
     contact = f.contact
     offset = 0 #signs[i%2]*14.
@@ -888,10 +887,10 @@ def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
         plut.draw_line(f.center, contact[:,-1], np.ones(3)*0.5, linewidth=linewidth*0.5, linestyle=':')
     plut.fill_circle(f.center, linewidth*5, 'k')
     
-    left = parallel_offset(f.support[0], offset)
+    left = sym.parallel_offset_open(f.support[0], offset)
     #pdb.set_trace()
-    right = parallel_offset(f.support[1], offset)
-    contact = parallel_offset(f.contact, offset)
+    right = sym.parallel_offset_open(f.support[1], offset)
+    contact = sym.parallel_offset_open(f.contact, offset)
     plut.fill_circle(f.pos, linewidth*10, 'r', zorder=1000)
     if type(left)==list:
         left = np.hstack(left)
@@ -904,5 +903,4 @@ def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
     plut.stroke_poly(right, clr, closed=False, linewidth=linewidth*1.5, alpha=0.5)
     plut.stroke_poly(contact, clr, closed=False, linewidth=linewidth*1., linestyle=':')
     plut.stroke_poly(contact, 'k', closed=False, linewidth=linewidth*2.)
-    
-
+    plut.fill_poly(f.area, clr, alpha=0.3)
