@@ -1536,6 +1536,26 @@ def get_contour_segment(X, a, b, closed=True):
     Xp = np.array([X[:,(a+i)%n] for i in range(m)]).T
     return Xp
 
+def get_surrounding_contour_segment(X, a, b, c, closed=True):
+    ''' Gets a (wrapped) contour segment between a and c
+    and containing b.
+    This is useful for longer segments that could break when specifying only two points.
+    TODO: test if this is useful/necessary in rest of code
+    '''
+    n = X.shape[1]
+
+    if not closed:
+        return X[:, max(0, a):min(c, n)]
+
+    Xp = []
+    m = (b-a)%n
+    Xp += [X[:,(a+i)%n] for i in range(m)]
+    m = (c-b)%n
+    Xp += [X[:,(b+i)%n] for i in range(m)]
+
+    return np.array(Xp).T
+
+
 def shift_feature(offset, f, P, closed):
     ''' Shifts indices of a feature (wrapped)'''
     n = P.shape[1]
@@ -2018,6 +2038,9 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
             lim_b = max(n // 2, (f1.i - f0.i)%n)
             a = (f1.i - lim_a)%n
             b = (f1.i + lim_b)%n
+            # if f1.i == 64:
+            #     pdb.set_trace()
+
     elif support_type==SUPPORT_INTERPOLATED: # cfg.interpolate_support:
         if cfg.support_uses_distance:
             speed = cfg.interpolation_exp_rise
@@ -2073,30 +2096,32 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     """
     n = P.shape[1]
 
-    #pdb.set_trace()
-
     if f0.i == f2.i:
-        Pv = get_contour_segment(P, f0.i, (f2.i)%n, closed)
+        Pv = get_surrounding_contour_segment(P, f0.i, f1.i, (f2.i)%n, closed)
         Pv = Pv[:,:-1]
-        f1 = shift_feature(-f0.i, f1, P, closed)
-        f2 = shift_feature(-f0.i, f1, P, closed)
-        f3 = shift_feature(-f0.i, f2, P, closed)
+        fs0 = shift_feature(-f0.i, f0, P, closed)
+        fs1 = shift_feature(-f0.i, f1, P, closed)
+        fs2 = shift_feature(-f0.i, f2, P, closed)
 
-        return Pv, f1, f2, f3
+        return Pv, fs0, fs1, fs2
     #endif
 
     a, b = left_right_support_anchors(P, f0, f1, f2, closed)
 
-    Pv = get_contour_segment(P, a, b, closed=closed)
-    f0 = shift_feature(-a, f0, P, closed)
-    f1 = shift_feature(-a, f1, P, closed)
-    f2 = shift_feature(-a, f2, P, closed)
+    # if f1.i == 64:
+    #     pdb.set_trace()
+
+    Pv = get_surrounding_contour_segment(P, a, f1.i, b, closed=closed)
+
+    fs0 = shift_feature(-a, f0, P, closed)
+    fs1 = shift_feature(-a, f1, P, closed)
+    fs2 = shift_feature(-a, f2, P, closed)
 
     if len(Pv.shape) < 2:
-        return np.zeros((2,0)), f0, f1, f2 #Invalid
+        return np.zeros((2,0)), fs0, fs1, fs2 #Invalid
     # wat?
     #f = f._replace(anchors=(f.anchors[0], min(f.anchors[1], Pv.shape[1]-1)))
-    return Pv, f0, f1, f2
+    return Pv, fs0, fs1, fs2
 #endf
 
 def compute_depth_saliency(P, f0, f1, f2, closed=True, debug_draw=False, get_area=False):
