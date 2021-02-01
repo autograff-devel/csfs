@@ -2011,8 +2011,10 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
             a = 0
             b = n-1
         else:
-            a = (f1.i - (n // 2))%n
-            b = (f1.i + (n // 2))%n
+            lim_a = max(n // 2, (f2.i - f1.i)%n)
+            lim_b = max(n // 2, (f1.i - f0.i)%n)
+            a = (f1.i - lim_a)%n
+            b = (f1.i + lim_b)%n
     elif support_type==SUPPORT_INTERPOLATED: # cfg.interpolate_support:
         if cfg.support_uses_distance:
             speed = cfg.interpolation_exp_rise
@@ -2071,7 +2073,7 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     #pdb.set_trace()
 
     if f0.i == f2.i:
-        Pv = get_contour_segment(P, f0.i, (f2.i)%n, closed) 
+        Pv = get_contour_segment(P, f0.i, (f2.i)%n, closed)
         Pv = Pv[:,:-1]
         f1 = shift_feature(-f0.i, f1, P, closed)
         f2 = shift_feature(-f0.i, f1, P, closed)
