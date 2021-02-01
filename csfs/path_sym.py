@@ -2070,11 +2070,14 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
 
     #pdb.set_trace()
 
-    if f0.i == f2.i and cfg.saliency_support_type != SUPPORT_ALL: # loop case
+    if f0.i == f2.i:
         Pv = get_contour_segment(P, f0.i, (f2.i)%n, closed) 
         Pv = Pv[:,:-1]
-        f = shift_feature(-f0.i, f1, P, closed)
-        return Pv, f
+        f1 = shift_feature(-f0.i, f1, P, closed)
+        f2 = shift_feature(-f0.i, f1, P, closed)
+        f3 = shift_feature(-f0.i, f2, P, closed)
+
+        return Pv, f1, f2, f3
     #endif
 
     a, b = left_right_support_anchors(P, f0, f1, f2, closed)
@@ -2268,15 +2271,16 @@ def compute_depth_saliency_contour_all(P, Pv, fl, f, fr, debug_draw=False, get_a
     end_area = b + extremities[-1][1]
     area_poly = Pv[:,start_area:end_area+1]
 
-    pl, pr = endpoints[-1]
-    b = angle_bisector(p, pl, pr)
-    h = norm(b)
-    #plut.draw_line(p, p + b, 'b', linewidth=2.)
-    w = np.exp(-f.r/h)
-
-    area = abs(geom.polygon_area(area_poly))
-    disk_area = np.pi * f.r**2
-    w = np.exp(-disk_area/(2*area))
+    if cfg.use_area_saliency:
+        area = abs(geom.polygon_area(area_poly))
+        disk_area = np.pi * f.r**2
+        w = np.exp(-disk_area/(2*area))
+    else:
+        pl, pr = endpoints[-1]
+        b = angle_bisector(p, pl, pr)
+        h = norm(b)
+        #plut.draw_line(p, p + b, 'b', linewidth=2.)
+        w = np.exp(-f.r/h)
 
     if debug_draw and f.sign < 0:
         #pl, pr = segs[i]

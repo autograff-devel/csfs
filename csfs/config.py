@@ -16,7 +16,7 @@ cfg.add("minima_smooth_k", 100., "Smoothing (for spline) when computing minima")
 cfg.add("minima_smooth_sigma", 1, "unused")
 cfg.add("feature_saliency_thresh", 5e-3, "Minimum CSF saliency")
 cfg.add("minima_saliency_thresh", 1e-6, "Minimum CSF saliency")
-
+cfg.add("use_area_saliency", False, "If true, uses area based saliency")
 cfg.add("transition_angle_subd", np.pi * 4/5, "total turning angle subdivision for computing transitions")
 cfg.add("spiral_subdivision", 70, "Number of points per spiral segment (for transition fitting proc.)")
 
