@@ -1547,13 +1547,16 @@ def get_surrounding_contour_segment(X, a, b, c, closed=True):
     if not closed:
         return X[:, max(0, a):min(c, n)]
 
-    Xp = []
-    m = (b-a)%n
-    Xp += [X[:,(a+i)%n] for i in range(m)]
-    m = (c-b)%n
-    Xp += [X[:,(b+i)%n] for i in range(m)]
+    Xl = get_contour_segment(X, a, b)
+    Xr = get_contour_segment(X, b, (c+1)%n)
+    return np.hstack([Xl, Xr])
+    # Xp = []
+    # m = (b-a)%n
+    # Xp += [X[:,(a+i)%n] for i in range(m)]
+    # m = (c-b)%n
+    # Xp += [X[:,(b+i)%n] for i in range(m)]
 
-    return np.array(Xp).T
+    # return np.array(Xp).T
 
 
 def shift_feature(offset, f, P, closed):
@@ -2038,7 +2041,7 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
             lim_b = max(n//2-1, (f1.i - f0.i)%n)
             a = (f1.i - lim_a)%n
             b = (f1.i + lim_b)%n
-            # if f1.i == 61:
+            # if f1.i == 0:
             #     pdb.set_trace()
 
     elif support_type==SUPPORT_INTERPOLATED: # cfg.interpolate_support:
@@ -2095,6 +2098,9 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
         ndarray, CSF: contour segment and shifted CSF
     """
     n = P.shape[1]
+
+    # if f1.i == 0:
+    #     brk()
 
     if f0.i == f2.i: # Loop case
         Pv = get_contour_segment(P, f0.i, f2.i, closed)
