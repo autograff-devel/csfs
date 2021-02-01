@@ -1531,7 +1531,7 @@ def get_contour_segment(X, a, b, closed=True):
     #    m = X.shape[1]
     #else:
     m = (b-a)%n
-    if m == 0:
+    if m == 0: # Loop case
         m = X.shape[1]
     Xp = np.array([X[:,(a+i)%n] for i in range(m)]).T
     return Xp
@@ -2033,12 +2033,12 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
         else:
             # We usually traverse half contour on each side of feature
             # but there are cases in which there are only two adjacent features and these are asymmetric
-            # the following compensates for that
-            lim_a = max(n // 2, (f2.i - f1.i)%n)
-            lim_b = max(n // 2, (f1.i - f0.i)%n)
+            # the following co/mpensates for that
+            lim_a = max(n//2-1, (f2.i - f1.i)%n)
+            lim_b = max(n//2-1, (f1.i - f0.i)%n)
             a = (f1.i - lim_a)%n
             b = (f1.i + lim_b)%n
-            # if f1.i == 64:
+            # if f1.i == 61:
             #     pdb.set_trace()
 
     elif support_type==SUPPORT_INTERPOLATED: # cfg.interpolate_support:
@@ -2096,9 +2096,8 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     """
     n = P.shape[1]
 
-    if f0.i == f2.i:
-        Pv = get_surrounding_contour_segment(P, f0.i, f1.i, (f2.i)%n, closed)
-        Pv = Pv[:,:-1]
+    if f0.i == f2.i: # Loop case
+        Pv = get_contour_segment(P, f0.i, f2.i, closed)
         fs0 = shift_feature(-f0.i, f0, P, closed)
         fs1 = shift_feature(-f0.i, f1, P, closed)
         fs2 = shift_feature(-f0.i, f2, P, closed)
@@ -2107,9 +2106,6 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
     #endif
 
     a, b = left_right_support_anchors(P, f0, f1, f2, closed)
-
-    # if f1.i == 64:
-    #     pdb.set_trace()
 
     Pv = get_surrounding_contour_segment(P, a, f1.i, b, closed=closed)
 
@@ -2127,13 +2123,14 @@ def CSF_contour_segment_and_extreum(P, f0, f1, f2, closed):
 def compute_depth_saliency(P, f0, f1, f2, closed=True, debug_draw=False, get_area=False):
     #if is_minimum(f1):
     #    debug_draw=True
-    Pv, f0, f1, f2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
+    Pv, fs0, fs1, fs2 = CSF_contour_segment_and_extreum(P, f0, f1, f2, closed)
     if Pv.shape[1] < 3:
         if get_area:
             return 0, Pv
         return 0
+
     #return compute_depth_saliency_contour_max_h(P, Pv, f1, debug_draw, get_area)
-    return compute_depth_saliency_contour_all(P, Pv, f0, f1, f2, debug_draw, get_area)
+    return compute_depth_saliency_contour_all(P, Pv, fs0, fs1, fs2, debug_draw, get_area)
 
 def angle_bisector(A, B, C):
     dc = B - A
@@ -2144,97 +2141,6 @@ def angle_bisector(A, B, C):
     d = np.sqrt(((b*c)/(b + c)**2)*
                 ((b+c)**2 - a**2))
     return geom.normalize((dc/c + db/b))*d
-
-def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False, get_area=False):
-    a, b = Pv[:,0], Pv[:,-1]
-    r = f.r
-
-    # traverse both CSF support segments
-    L = Pv[:, :f.anchors[0]+1][:,::-1]
-    R = Pv[:, f.anchors[1]:]
-    H = []
-    segs = []
-    p = f.extrema_pos
-
-    if L.shape[1] < 1:
-        L = Pv[:,f.anchors[0]].reshape(-1,1)
-    if R.shape[1] < 1:
-        R = Pv[:,f.anchors[1]].reshape(-1,1)
-    
-    if cfg.shortest_support_only:
-        m = min(L.shape[1], R.shape[1])
-    else:
-        m = max(L.shape[1], R.shape[1])
-
-    extremities = []
-
-    # Simple polygon heuristic
-    prev = None
-    maxl = L.shape[1]-1
-    maxr = R.shape[1]-1
-    for i in range(m):
-        il = min(i, maxl)
-        ir = min(i, maxr)
-        pl = L[:,il]
-        pr = R[:,ir]
-
-        if prev is not None and cfg.only_simple_areas:
-            if il < maxl and geom.segment_intersection(pl, pr, prev[0], p)[0]:
-                break
-            if ir < maxr and geom.segment_intersection(pl, pr, prev[1], p)[0]:
-                break
-        prev = (pl, pr)
-
-        extremities.append((il, ir))
-        #h = geom.point_segment_distance(p, pl, pr)
-        h = norm(angle_bisector(p, pl, pr)) # TODO consider using bisector here
-        if curvature_sign(pl, p, pr) != f.sign:
-            h = -h
-        if np.isnan(h):
-            h = -10
-        H.append(h)
-        segs.append((pl, pr))
-
-    
-    #pdb.set_trace()
-    #if is_minimum(f):
-    #    pdb.set_trace()
-        
-    i = np.argmax(H)
-
-    # Construct the contour area for saliency
-    start_area = f.anchors[0]-extremities[i][0]
-    end_area = f.anchors[1]+extremities[i][1]
-    area_poly = Pv[:,start_area:end_area+1]
-
-    if i > 0 and debug_draw: # and f.sign < 0:
-        for j in range(m): #i):
-            if j%2:
-                continue
-            pl, pr = segs[j]
-            plut.draw_line(pl, pr, np.ones(3)*0.7, alpha=0.5, linewidth=0.25)
-
-    h = H[i]
-    if h < 0:
-        return 0
-    
-    if debug_draw and f.sign < 0: 
-        pl, pr = segs[i]
-        plut.draw_line(pl, pr, 'b', linewidth=0.5, linestyle=':') #[0,0.3,0,7])
-        
-        ph = p + angle_bisector(p, pl, pr)
-        #ph = geom.project(p, pl, pr)
-        plut.draw_line(ph, p, 'r', linewidth=0.5)
-
-        plut.fill_poly(area_poly, 'c', alpha=0.3)
-        # plut.stroke_poly(P1o, plut.colors.cyan, closed=False, linewidth=1.5, alpha=alpha)
-        # plut.stroke_poly(P2o, 'm', closed=False, linewidth=1.5, alpha=alpha)
-
-    w = np.exp(-r/h)     
-    if get_area:
-        return w, area_poly
-    else:
-        return w
 
 
 def compute_depth_saliency_contour_all(P, Pv, fl, f, fr, debug_draw=False, get_area=False):
@@ -3579,6 +3485,98 @@ def distance_IoU(fi, fj, P, closed):
 
 ## Deprecated saliency variants
 # Variants
+def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False, get_area=False):
+    a, b = Pv[:,0], Pv[:,-1]
+    r = f.r
+
+    # traverse both CSF support segments
+    L = Pv[:, :f.anchors[0]+1][:,::-1]
+    R = Pv[:, f.anchors[1]:]
+    H = []
+    segs = []
+    p = f.extrema_pos
+
+    if L.shape[1] < 1:
+        L = Pv[:,f.anchors[0]].reshape(-1,1)
+    if R.shape[1] < 1:
+        R = Pv[:,f.anchors[1]].reshape(-1,1)
+
+    if cfg.shortest_support_only:
+        m = min(L.shape[1], R.shape[1])
+    else:
+        m = max(L.shape[1], R.shape[1])
+
+    extremities = []
+
+    # Simple polygon heuristic
+    prev = None
+    maxl = L.shape[1]-1
+    maxr = R.shape[1]-1
+    for i in range(m):
+        il = min(i, maxl)
+        ir = min(i, maxr)
+        pl = L[:,il]
+        pr = R[:,ir]
+
+        if prev is not None and cfg.only_simple_areas:
+            if il < maxl and geom.segment_intersection(pl, pr, prev[0], p)[0]:
+                break
+            if ir < maxr and geom.segment_intersection(pl, pr, prev[1], p)[0]:
+                break
+        prev = (pl, pr)
+
+        extremities.append((il, ir))
+        #h = geom.point_segment_distance(p, pl, pr)
+        h = norm(angle_bisector(p, pl, pr)) # TODO consider using bisector here
+        if curvature_sign(pl, p, pr) != f.sign:
+            h = -h
+        if np.isnan(h):
+            h = -10
+        H.append(h)
+        segs.append((pl, pr))
+
+
+    #pdb.set_trace()
+    #if is_minimum(f):
+    #    pdb.set_trace()
+
+    i = np.argmax(H)
+
+    # Construct the contour area for saliency
+    start_area = f.anchors[0]-extremities[i][0]
+    end_area = f.anchors[1]+extremities[i][1]
+    area_poly = Pv[:,start_area:end_area+1]
+
+    if i > 0 and debug_draw: # and f.sign < 0:
+        for j in range(m): #i):
+            if j%2:
+                continue
+            pl, pr = segs[j]
+            plut.draw_line(pl, pr, np.ones(3)*0.7, alpha=0.5, linewidth=0.25)
+
+    h = H[i]
+    if h < 0:
+        return 0
+
+    if debug_draw and f.sign < 0:
+        pl, pr = segs[i]
+        plut.draw_line(pl, pr, 'b', linewidth=0.5, linestyle=':') #[0,0.3,0,7])
+
+        ph = p + angle_bisector(p, pl, pr)
+        #ph = geom.project(p, pl, pr)
+        plut.draw_line(ph, p, 'r', linewidth=0.5)
+
+        plut.fill_poly(area_poly, 'c', alpha=0.3)
+        # plut.stroke_poly(P1o, plut.colors.cyan, closed=False, linewidth=1.5, alpha=alpha)
+        # plut.stroke_poly(P2o, 'm', closed=False, linewidth=1.5, alpha=alpha)
+
+    w = np.exp(-r/h)
+    if get_area:
+        return w, area_poly
+    else:
+        return w
+
+
 def compute_depth_saliency_contour_simple(P, Pv, f, debug_draw=False):
     a, b = Pv[:,0], Pv[:,-1]
     r = f.r
