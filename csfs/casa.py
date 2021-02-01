@@ -349,7 +349,28 @@ def merge_forks(MA, thresh=0.20):
         MA.graph['vpos_chord'][n] = disks[n].center
     #endf
 #endf        
-        
+
+def split_MA_node(MA, n):
+    disks = MA.graph['disks']
+    vpos = list(MA.graph['vpos'])
+    max_id = len(vpos)
+    ds = MA.graph['ds']
+
+    a = max_id+1
+    bors = list(MA.neighbors(n))
+    for b in bors:
+        remove_edge_safe(MA, n, b)
+
+    pnew = disks[n].center + np.random.uniform(-ds, ds, 2)
+    disks[a] = disks[n]._replace(center=pnew)
+    vpos.append(pnew)
+    for b in bors[:2]:
+        MA.add_edge(n, b)
+    MA.add_edge(n, a)
+    for b in bors[2:]:
+        MA.add_edge(a, b)
+
+
 def cleanup_MA(MA, ds):
     discard = set()
     disks = MA.graph['disks']
@@ -359,6 +380,18 @@ def cleanup_MA(MA, ds):
             
     for n in discard:
         MA.remove_node(n)
+
+    while True:
+        must_split = []
+        for n in MA.nodes():
+            if MA.degree(n)>3:
+                must_split.append(n)
+        if not must_split:
+            break
+        for n in must_split:
+            brk()
+            split_MA_node(MA, n)
+
     return MA
 
 
@@ -409,9 +442,6 @@ def compute_skeleton_and_features(shape, fork_merge_thresh=0.0, size=None, exter
         MA.graph['features'] = features
         MA.graph['feature_count'] = feature_count
 
-    if fork_merge_thresh > 0:
-        merge_forks(MA, fork_merge_thresh*ds)
-    
     # Exterior MA
     _, exterior_MA = vma.voronoi_skeleton(shape, thresh=cfg.vma_thresh, closed=True, internal_flag=2)
     cleanup_MA(exterior_MA, ds) #<- some cases producing spurious isolated nodes near corners
@@ -575,6 +605,9 @@ def compute_casa(MA, features, sign=1):
             #plut.fill_circle(disks[n].center, 11, plut.colors.cyan, zorder=1000)
             
         #csfdisk = vma.Disk(f.center, f.r, f.anchors, 0, False)
+        if MA_ext.degree(n) > 2:
+            continue
+
         f = features[fi]
         nt = newnode
         newnode += 1
