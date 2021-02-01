@@ -2011,6 +2011,9 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
             a = 0
             b = n-1
         else:
+            # We usually traverse half contour on each side of feature
+            # but there are cases in which there are only two adjacent features and these are asymmetric
+            # the following compensates for that
             lim_a = max(n // 2, (f2.i - f1.i)%n)
             lim_b = max(n // 2, (f1.i - f0.i)%n)
             a = (f1.i - lim_a)%n
