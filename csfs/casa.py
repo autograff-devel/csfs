@@ -466,6 +466,12 @@ def contact_region(MA, f, extend=0):
     a, b = f.anchors
     return flat.wrapped_range(a, b, extend=extend)
 
+def half_list(l):
+    n = len(l)
+    return l[:n//2]
+
+def csf_support_point_indices(f):
+    return half_list(f.support_inds[0]) + half_list(f.support_inds[1]) + f.contact_inds
 
 def compute_casa(MA, features, sign=1):
     MA_ext = MA.copy()
@@ -488,17 +494,18 @@ def compute_casa(MA, features, sign=1):
 
     for fi in M:
         f = features[fi]
-        contact = contact_region(MA, f, extend=2) #<- Workaround here. we extend
-                                                  #   the contact region,
-                                                  #   because some rather large
-                                                  #   features might produce a
-                                                  #   pruned branch in MA, which
-                                                  #   results in anchors missing
-                                                  #   along the contact region.
-                                                  #   Need to check (as an
-                                                  #   example see CSFs for Ultra
-                                                  #   Regular 'B')
-        for j in contact:
+        # contact = contact_region(MA, f, extend=2) #<- Workaround here. we extend
+        #                                           #   the contact region,
+        #                                           #   because some rather large
+        #                                           #   features might produce a
+        #                                           #   pruned branch in MA, which
+        #                                           #   results in anchors missing
+        #                                           #   along the contact region.
+        #                                           #   Need to check (as an
+        #                                           #   example see CSFs for Ultra
+        #                                           #   Regular 'B')
+        support = csf_support_point_indices(f)
+        for j in support:
             outline_to_feature[j] = fi
         # See "n.svg" in svg/junctions for where the above breaks
         # Pc = np.array([points[i] for i in contact]).T
