@@ -96,8 +96,13 @@ def potential_residual(P, a, b, r, Win, center, part_ids=None, closed=False):
     else:
         W, Lb = Win
 
+    is_closed = False
+    if type(closed)==list:
+        is_closed = closed[a]
+    else:
+        is_closed = closed
     #return abs(W[a] - W[b]) # open contour
-    if closed:
+    if is_closed:
         return min(abs(W[a] - W[b]), 
                    Lb - abs(W[a] - W[b]))
     return abs(W[a] - W[b]) # open contour                   
@@ -566,6 +571,9 @@ def VMA(S, thresh, residual=chord_residual, closed=True, farthest=False, debug_d
         outputs the VMA edges and info as well as the whole Voronoi diagram '''
     shape_inds = sum([[i for j in range(P.shape[1])] for i,P in enumerate(S)], [])
     P = np.hstack(S)
+    if type(closed)==list:
+        closed = sum(closed, [])
+
     with perf_timer('Computing Delaunay') as tt:
         delu = Delaunay(P.T, furthest_site=farthest, incremental=False, qhull_options='Qbb Qc QJ')
     with perf_timer('Computing Voronoi Diagram') as tt:
@@ -625,6 +633,8 @@ def make_graph(vma, vor_delu, farthest, closed):
     # traverse each branch and set vertices
     branches = graph_branches(G)
     for branch in branches:
+
+
         # possibly never start from tip
         if G.degree(branch[0])==1:
             branch = branch[::-1]
@@ -636,17 +646,23 @@ def make_graph(vma, vor_delu, farthest, closed):
                     r = 15 
                 else:
                     r = 100000
+                center = e.center
             else:
-                r = geom.circumcircle_radius(*tris[v])
-            
-            disk = Disk(center=e.center, #verts[v],
+                if G.degree(a)==2:
+                    center = e.center
+                    r = geom.distance(center, points[e.anchors[0]])
+                else:
+                    center = verts[v]
+                    r = geom.circumcircle_radius(*tris[v])
+
+            disk = Disk(center=center, #verts[v],
                                    r=r,
                                    anchors=e.anchors,
                                    residual=e.residual,
                                    inf=v in infinite) #infinite[v])
 
             G.graph['disks'][v] = disk
-            vpos[v] = disk.center
+            vpos[v] = center #disk.center
         #endfor
 
         # take care of last vertex
@@ -859,13 +875,13 @@ def draw_delaunay_in_shape(delu, S, clr='k', alpha=0.5, linestyle='-'):
                 midpts.append((a+b)/2)
     return np.array(midpts).T
         
-def draw_delaunay(delu, clr='k', alpha=0.5):
+def draw_delaunay(delu, clr='k', alpha=0.5, linewidth=0.5):
     ''' Draw Delaunay triangulation'''
     if delu==None:
         return
     tris = delu.points[delu.simplices]
     for tri in tris:
-        plut.stroke_poly(tri.T, clr, closed=True, alpha=alpha)
+        plut.stroke_poly(tri.T, clr, closed=True, alpha=alpha, linewidth=linewidth)
         
 def draw_pruned_delaunay(MA, delu, clr='k', alpha=0.5, fill=False):
     ''' Draw Delaunay triangulation pruned by VMA threshold'''
