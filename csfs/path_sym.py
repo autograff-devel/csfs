@@ -71,7 +71,7 @@ SUPPORT_ALL = 4
 # Saliency support type is used for saliency computations
 # Generator support type is used to generate local axes and for recursive computation
 # The values set here are finalized. Do not change
-cfg.saliency_support_type = SUPPORT_ALL #SUPPORT_ALL #SUPPORT_EXTREMA #SUPPORT_ALL # #ALTERNATE #EXTREMA
+cfg.saliency_support_type = SUPPORT_EXTREMA #SUPPORT_ALL #SUPPORT_ALL # #SUPPORT_ALL # #ALTERNATE #EXTREMA
 cfg.generator_support_type = SUPPORT_CONTACT
 cfg.shortest_support_only = False # <- if True max saliency computation stops when it reaches the shortest segment
 cfg.cut_axis_segments = False # <- cuts axis segments at first support end
@@ -2042,7 +2042,7 @@ def left_right_support_anchors(P, f0, f1, f2, closed, support_type=None):
             a = (f1.i - lim_a)%n
             b = (f1.i + lim_b)%n
             # if f1.i == 0:
-            #     pdb.set_trace()
+            #     pdb.set_trace(
 
     elif support_type==SUPPORT_INTERPOLATED: # cfg.interpolate_support:
         if cfg.support_uses_distance:
@@ -2135,8 +2135,11 @@ def compute_depth_saliency(P, f0, f1, f2, closed=True, debug_draw=False, get_are
             return 0, Pv
         return 0
 
-    #return compute_depth_saliency_contour_max_h(P, Pv, f1, debug_draw, get_area)
-    return compute_depth_saliency_contour_all(P, Pv, fs0, fs1, fs2, debug_draw, get_area)
+    if cfg.saliency_support_type == SUPPORT_ALL:
+        return compute_depth_saliency_contour_all(P, Pv, fs0, fs1, fs2, debug_draw, get_area)
+    else:
+        return compute_depth_saliency_contour_max_h(P, Pv, fs1, debug_draw, get_area)
+
 
 def angle_bisector(A, B, C):
     dc = B - A
@@ -3562,6 +3565,8 @@ def compute_depth_saliency_contour_max_h(P, Pv, f, debug_draw=False, get_area=Fa
 
     h = H[i]
     if h < 0:
+        if get_area:
+            return 0, area_poly
         return 0
 
     if debug_draw and f.sign < 0:
