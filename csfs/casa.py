@@ -72,36 +72,35 @@ cfg.casa_has_minima = False
 # Since we are interested in computing CSFs for compound shapes (with holes), and only considering
 # absolute maxima of curvature, the following abstracts the information for a CSF along a flattened version of the shape contours
 # Also simplifies the structure in path_sym, which is overly-complex because of all the iterations in its development
-CSFLocal = namedtuple('CSFLocal', 'i pos anchors center r sign saliency is_sat support support_inds contact contact_inds MA area')
+CSFLocal = namedtuple('CSFLocal', 'i pos anchors center r sign saliency is_sat support support_inds contact contact_inds MA area contact_length')
 
-#%%
+
 class FlatShape:
     ''' Utility to index a compound shape flatten into a single array'''
     def __init__(self, S, axis=1):
         if axis==1:
             lenf = lambda P: P.shape[1]
             self.flat = np.hstack(S)
-        
         else:
             lenf = lambda P: len(P)
-            self.flat = sum(S, []) 
-            
+            self.flat = sum(S, [])
+
         self.shape_inds = sum([[i for j in range(lenf(P))] for i, P in enumerate(S)], [])
 
         self.start_inds = [0]
         for P in S:
             self.start_inds += [self.start_inds[-1] + lenf(P)]
         self.shape = S
-    
+
     def flat_index(self, i, j):
         return self.start_inds[i] + j
-    
+
     def shape_index(self, i):
         return vma.get_shape_index(i, self.start_inds, self.shape_inds)
-    
+
     def __getitem__(self, i):
-    	return vma.get_shape_index(i, self.start_inds, self.shape_inds)
-    
+        return vma.get_shape_index(i, self.start_inds, self.shape_inds)
+
     def sort_wrapped(self, flat_a, flat_b, direction=0):
         ia, a = self.shape_index(flat_a)
         ib, b = self.shape_index(flat_b)
@@ -109,64 +108,62 @@ class FlatShape:
             return flat_a, flat_b
         i = ia
         n = self.shape[i].shape[1]
-        if (a-b)%n < (b-a)%n:
+        if (a-b) % n < (b-a) % n:
             a, b = b, a
         return self.flat_index(i, a), self.flat_index(i, b)
-    #endf
-    
+
     def wrapped_midpoint_index(self, flat_a, flat_b, safe=False):
         ia, a = self.shape_index(flat_a)
         ib, b = self.shape_index(flat_b)
-        # If the two points are on two different contours 
+        # If the two points are on two different contours
         # simply return the midpoint as a workaround
         if ia != ib:
             if safe:
                 return -1
             p = (self.shape[ia][:,a] + self.shape[ib][:,b])/2
-            #plut.fill_circle(p, 5, 'k')
+            # plut.fill_circle(p, 5, 'k')
             return p
         i = ia
         n = self.shape[i].shape[1]
         d = ((b - a)%n) // 2
         mid = (a + d)%n
         return self.flat_index(i, mid)
-    #endf
-    
+
     def wrapped_midpoint(self, flat_a, flat_b):
         ia, a = self.shape_index(flat_a)
         ib, b = self.shape_index(flat_b)
         # If the two points are on two different contours 
         # simply return the midpoint as a workaround
-        if ia != ib: 
-            p = (self.shape[ia][:,a] + self.shape[ib][:,b])/2
-            #plut.fill_circle(p, 5, 'k')
+        if ia != ib:
+            p = (self.shape[ia][:, a] + self.shape[ib][:, b])/2
+            # plut.fill_circle(p, 5, 'k')
             return p
         i = ia
         n = self.shape[i].shape[1]
-        d = ((b - a)%n) // 2
-        mid = (a + d)%n
+        d = ((b - a) % n) // 2
+        mid = (a + d) % n
         p = self.shape[i][:,mid]
-        #plut.fill_circle(p, 5, 'g')
+        # plut.fill_circle(p, 5, 'g')
         return p
-    
+
     def range_internal(self, flat_a, flat_b, extend=0, extend_a=0, extend_b=0, safe=False):
         if extend:
             extend_a = extend_b = extend
         ia, a = self.shape_index(flat_a)
         ib, b = self.shape_index(flat_b)
-        
+
         if ia != ib:
             if safe:
                 raise ValueError
             return [flat_a, flat_b]
-        
+
         i = ia
         n = self.shape[i].shape[1]
-        a = (a-extend_a)%n
-        d = ((b - a)%n) + 1 + extend_b
-        
-        return list([self.flat_index(i, (a + j)%n) for j in range(d)])
-    
+        a = (a-extend_a) % n
+        d = ((b - a) % n) + 1 + extend_b
+
+        return list([self.flat_index(i, (a + j) % n) for j in range(d)])
+
     # def wrapped_region(self, flat_i, extend, safe=False):
     #     flat_a, flat_b = self.sort_wrapped(flat_a, flat_b)
     #     return self.range_internal(flat_a, flat_b, extend, safe)
@@ -265,7 +262,7 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
             #    r = cfg.corner_radius_thresh*ds
 
             is_sat = True if ('is_sat' in f.data and f.data['is_sat']) else False
-            
+
             local_features.append(CSFLocal(i=flat.flat_index(i, f.i),
                                            pos=P[:,f.i], #f.extrema_pos,
                                            anchors=flatten_anchors(i, f.anchors),
@@ -279,7 +276,8 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
                                            contact=f.data['contact'],
                                            contact_inds=[flat.flat_index(i, j) for j in f.data['contact_inds']],
                                            MA=f.data['MA'],
-                                           area=f.data['area']))
+                                           area=f.data['area'],
+                                           contact_length=geom.chord_length(f.data['contact'])))
             feature_count[i] += 1
             
     return local_features, feature_count
@@ -470,10 +468,73 @@ def half_list(l):
     n = len(l)
     return l[:n//2]
 
+
 def csf_support_point_indices(f):
     return half_list(f.support_inds[0]) + half_list(f.support_inds[1]) + f.contact_inds
 
-def compute_casa_null(MA, features, sign=1):
+
+def compute_flexures(MA, features):
+    # Identify all features that are not generated by a MA branch
+    disks = MA.graph['disks']
+    points = MA.graph['points']
+
+    if not len(MA.nodes()):
+        return MA
+
+    # all features with given sign
+    M = [i for i, f in enumerate(features) if f.sign == 1]
+
+    # map from outline points contained in a contact region,
+    # to the corresponding feature
+    outline_to_feature = {}
+
+    for fi in M:
+        f = features[fi]
+        for j in f.contact_inds:
+            outline_to_feature[j] = fi
+        # See "n.svg" in svg/junctions for where the above breaks
+        # Pc = np.array([points[i] for i in contact]).T
+        # if fi == 7:
+        #     pdb.set_trace()
+        #     print('test')
+
+    feature_to_node = defaultdict(set)
+
+    # Use this to assign features to nodes
+    for n in MA.nodes():
+        if MA.degree(n) > 2:
+            continue
+        p = disks[n].anchors
+        for j in p:
+            if j in outline_to_feature:
+                feature_to_node[outline_to_feature[j]].add(n)
+
+    flexures = {}
+    flexure_convexities = set()
+
+    for fi, nodes in feature_to_node.items():
+        if not nodes:
+            continue
+        f = features[fi]
+        n = None
+
+        nodes = sorted(nodes, key=lambda n:
+                       geom.distance(disks[n].center, points[f.i]))
+        n = nodes[0]
+        if MA.degree(n) == 2:
+            flexures[n] = fi
+            flexure_convexities.add(fi)
+
+    MA.graph['flexures'] = flexures
+    MA.graph['flexure_convexities'] = flexure_convexities
+
+    MA.graph['MA_forks'] = set([n for n in MA.nodes() if MA.degree(n) > 2])
+    MA.graph['tip_features'] = {}
+    MA.graph['MA_terminals'] = set([n for n in MA.nodes() if MA.degree(n) == 1])
+    return MA
+
+
+def compute_casa_null(MA, features, sign=1, include_flexures=True, include_terminals=True):
     MA_ext = MA.copy()
     MA_ext.graph['flexures'] = {}
     MA_ext.graph['MA_forks'] = set([n for n in MA.nodes() if MA.degree(n) > 2])
@@ -482,7 +543,7 @@ def compute_casa_null(MA, features, sign=1):
     MA_ext.graph['MA_terminals'] = set([n for n in MA.nodes() if MA.degree(n) == 1])
     return MA_ext
 
-def compute_casa(MA, features, sign=1, include_flexures=True):
+def compute_casa(MA, features, sign=1, include_flexures=True, include_terminals=True):
     MA_ext = MA.copy()
     forks = set([n for n in MA.nodes() if MA.degree(n) > 2])
     terminals = set([n for n in MA.nodes() if MA.degree(n) == 1])
@@ -497,7 +558,11 @@ def compute_casa(MA, features, sign=1, include_flexures=True):
     
     # all features with given sign
     M = [i for i, f in enumerate(features) if f.sign==sign]
-    
+
+    # Note this will NOT work, since we compute CSFs for one contour at the time
+    # if not include_terminals:
+    #     M = [i for i in M if not features[i].is_sat]
+
     # map from outline points contained in a contact region, to the corresponding feature
     outline_to_feature = {}
 
@@ -523,7 +588,7 @@ def compute_casa(MA, features, sign=1, include_flexures=True):
         #     print('test')
     feature_to_node = defaultdict(set)
 
-    # anchors for each MA node. For nodes that have an angle between ribs < 90 degrees,
+    # Deprecated: anchors for each MA node. For nodes that have an angle between ribs < 90 degrees,
     # also consider the midpoint (TODO test me)
     nodes = list(MA.nodes())
     node_anchors = []
@@ -531,10 +596,10 @@ def compute_casa(MA, features, sign=1, include_flexures=True):
         anchors = list(disks[n].anchors)
         center = disks[n].center
         pa, pb = [points[p] for p in anchors]
-        if False: #geom.angle_between(pa - center, pb - center) < geom.radians(90): # np.dot(pa - center, pb - center) > 0:
-            mid = flat.wrapped_midpoint_index(*anchors, safe=True)
-            if mid >= 0:
-                anchors.append(mid)
+        # if False: #geom.angle_between(pa - center, pb - center) < geom.radians(90): # np.dot(pa - center, pb - center) > 0:
+        #     mid = flat.wrapped_midpoint_index(*anchors, safe=True)
+        #     if mid >= 0:
+        #         anchors.append(mid)
 
         node_anchors.append(anchors)
 
@@ -559,25 +624,50 @@ def compute_casa(MA, features, sign=1, include_flexures=True):
         if not nodes:
             continue
         f = features[fi]
-        
-        terminal_nodes = [n for n in nodes if MA.degree(n)==1]
-        if terminal_nodes:
-            nodes = terminal_nodes
-            is_flexure = False
-            nodes = sorted(nodes, key=lambda n: 
-                                geom.distance(disks[n].center, points[f.i]))
+        n = None
+
+        if include_terminals:
+            terminal_nodes = [n for n in nodes if MA.degree(n)==1]
+            if terminal_nodes:
+                nodes = terminal_nodes
+                is_flexure = False
+                nodes = sorted(nodes, key=lambda n:
+                                    geom.distance(disks[n].center, points[f.i]))
+                n = nodes[0]
+            else:
+                is_flexure = True
+                nodes = sorted(nodes, key=lambda n:
+                                    -np.dot(geom.normalize(points[f.i]-disks[n].center),
+                                        geom.normalize(points[f.i]-f.center))) #disks[n].center))
+                n = nodes[0]
+        else:
+            nodes = sorted(nodes, key=lambda n:
+                                    geom.distance(disks[n].center, points[f.i]))
             n = nodes[0]
-            # Only extend a terminal if disk overlap is less than theshold
-            # overlap = geom.circle_overlap(f.center, f.r, disks[n].center, disks[n].r)
-            # if overlap > 0.95:
-            #    n = None
-        elif include_flexures:
             is_flexure = True
-            nodes = sorted(nodes, key=lambda n: 
-                                -np.dot(geom.normalize(points[f.i]-disks[n].center), 
-                                       geom.normalize(points[f.i]-f.center))) #disks[n].center))
-            n = nodes[0]
-                
+            if MA.degree(n) == 1:
+                is_flexure = False
+                n = None
+
+        # if terminal_nodes:
+        #     if include_terminals:
+        #         nodes = terminal_nodes
+        #         is_flexure = False
+        #         nodes = sorted(nodes, key=lambda n:
+        #                             geom.distance(disks[n].center, points[f.i]))
+        #         n = nodes[0]
+        #     # Only extend a terminal if disk overlap is less than theshold
+        #     # overlap = geom.circle_overlap(f.center, f.r, disks[n].center, disks[n].r)
+        #     # if overlap > 0.95:
+        #     #    n = None
+        # else:
+        #     if include_flexures:
+        #         is_flexure = True
+        #         nodes = sorted(nodes, key=lambda n:
+        #                             -np.dot(geom.normalize(points[f.i]-disks[n].center),
+        #                                 geom.normalize(points[f.i]-f.center))) #disks[n].center))
+        #         n = nodes[0]
+
         if n is not None:
             candidates.append((n, fi, is_flexure))
     #endfor
@@ -591,10 +681,10 @@ def compute_casa(MA, features, sign=1, include_flexures=True):
         if not include_flexures:
             continue
         valid = True
-        for nj, fj, j_flexure in candidates:
-            if fi == fj or j_flexure:
-                continue
-            
+        # for nj, fj, j_flexure in candidates:
+        #     if fi == fj or j_flexure:
+        #         continue
+
             # if geom.distance(disks[ni].center, disks[nj].center) < disks[nj].r:
             #    valid = False
             #    break
@@ -778,7 +868,7 @@ def draw_features(MA, convexities=False, markersize=7, draw_areas=False):
             plut.stroke_circle(f.center, r, [1.,0.5,0.], alpha=1, linewidth=0.25)
             #plut.draw_marker(points[f.i], 'ro', markersize=2)
             plut.fill_circle(points[f.i], markersize, 'r')
-            if draw_areas:
+            if draw_areas and f.area is not None:
                 plut.fill_poly(f.area, 'r', alpha=0.5)
         if convexities:
             if f.sign > 0:
@@ -933,7 +1023,7 @@ def debug_skeleton(MA, forks=[]):
     plut.show(axis_limits=geom.bounding_box(MA.graph['shape'], 100))
 #endf
 
-def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
+def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False, draw_area=True):
     #from autograff.geom.shapely_wrap import parallel_offset
 
     contact = f.contact
@@ -966,4 +1056,5 @@ def draw_CSF(f, clr, offset=0, linewidth=1., draw_axis=False):
     plut.stroke_poly(right, clr, closed=False, linewidth=linewidth*1.5, alpha=0.5)
     plut.stroke_poly(contact, clr, closed=False, linewidth=linewidth*1., linestyle=':')
     plut.stroke_poly(contact, 'k', closed=False, linewidth=linewidth*2.)
-    plut.fill_poly(f.area, clr, alpha=0.3)
+    if draw_area:
+        plut.fill_poly(f.area, clr, alpha=0.3)

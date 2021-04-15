@@ -55,6 +55,8 @@ cfg = config.cfg
 cfg.r_thresh = 1200. # maximum accepted disk radius  (gets overridden in CASA for relative size)
 cfg.minima_r_thresh = 2000
 
+cfg.use_saliency = False
+
 cfg.discard_nested = True
 cfg.discard_nested_postprocess = False
 
@@ -71,7 +73,7 @@ SUPPORT_ALL = 4
 # Saliency support type is used for saliency computations
 # Generator support type is used to generate local axes and for recursive computation
 # The values set here are finalized. Do not change
-cfg.saliency_support_type = SUPPORT_EXTREMA #SUPPORT_ALL #SUPPORT_ALL # #SUPPORT_ALL # #ALTERNATE #EXTREMA
+cfg.saliency_support_type = SUPPORT_EXTREMA #SUPPORT_ALL # #SUPPORT_ALL # #ALTERNATE #EXTREMA
 cfg.generator_support_type = SUPPORT_CONTACT
 cfg.shortest_support_only = False # <- if True max saliency computation stops when it reaches the shortest segment
 cfg.cut_axis_segments = False # <- cuts axis segments at first support end
@@ -183,7 +185,7 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
         vma_thresh (float, optional): Force Voronoi skeleton regularization threshold. Defaults to None (default in voronoi_skeleton.py).
         full_reconstruction (bool, optional): If true, attempt to reconstruct the whole trace also with Euler Spiral segments
                                                Results in a linear approximation of curvature. Defaults to False.
-    
+
     Returns:
         list: list of Feature namedtuples or list of lists (for compound shapes)
     """    
@@ -218,7 +220,7 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
         disks = MA.graph['disks']
     else:
         # Detect self intersections
-        features, self_intersections = open_sym_extrema(P, ds, get_intersections=True)
+        features, self_intersections = open_sym_extrema(P, ds, is_sat=True, get_intersections=True)
         #features = dynamic_symmetry_extrema(P, closed=closed) 
 
     if len(features):
@@ -367,7 +369,7 @@ def split_at_self_intersections(P):
     #I.append(m)
     return I
 
-def open_sym_extrema(P, ds, self_intersections=None, get_intersections=False):
+def open_sym_extrema(P, ds, is_sat, self_intersections=None, get_intersections=False):
     if self_intersections is None:
         #pdb.set_trace()
         self_intersections = split_at_self_intersections(P)
@@ -380,7 +382,7 @@ def open_sym_extrema(P, ds, self_intersections=None, get_intersections=False):
     features = []
     for a, b in zip(I, I[1:]):
         #pdb.set_trace()
-        local_features = sym_extrema(P[:,a:b], ds, closed=False)
+        local_features = sym_extrema(P[:,a:b], ds, closed=False, is_sat=is_sat)
         local_features = [shift_feature(a, f, P, closed=False) for f in local_features]
         features += local_features
     #features =  merge_features(features, P, False)
@@ -453,7 +455,7 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
             vma.draw_skeleton(MA)
             
         for e in E:
-            if not farthest and disks[e].r > cfg.r_thresh:
+            if not farthest and disks[e].r >= cfg.r_thresh:
                 continue
             p = sort_anchors(disks[e].anchors, P, closed)
             #p = expand_voronoi_anchors(disks[e].anchors, disks[e], P, closed)
@@ -464,7 +466,6 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
             anchors.append(p)
             extremities.append(e) 
             extrema_pos.append(pm)
-
         # endfor 
 
         # Sort along contour    
@@ -643,7 +644,7 @@ def compute_CSFs(features, P, closed, compute_saliency=True, compute_axis=True):
         else:
             MA = None
         
-        if compute_saliency: # and not is_minimum(f2):
+        if compute_saliency and cfg.use_saliency: # and not is_minimum(f2):
             if is_minimum(f2):
                 print('minimum')
             saliency, area = compute_depth_saliency(P, f1, f2, f3, closed, get_area=True)
@@ -1401,15 +1402,20 @@ def select_most_salient_feature(P, start_feature, end_feature, features, closed,
         features = [f for f in features if not discard_nested_feature(P, f, start_feature, end_feature)]
         if not features:
             return []
-        
-    saliency = [compute_depth_saliency(P, start_feature, shift_feature(start, f, P, closed), end_feature, closed, debug_draw=draw) for f in features]
-    i = np.argmax(saliency)
-    f = features[i]
-    
+
+    if cfg.use_saliency:
+        saliency = [compute_depth_saliency(P, start_feature, shift_feature(start, f, P, closed), end_feature, closed, debug_draw=draw) for f in features]
+        i = np.argmax(saliency)
+        f = features[i]
+    else:
+        saliency = [f.r for f in features] #compute_depth_saliency(P, start_feature, shift_feature(start, f, P, closed), end_feature, closed, debug_draw=draw) for f in features]
+        i = np.argmin(saliency)
+        f = features[i]
+
     # if cfg.discard_nested_postprocess:
     #     if discard_nested_feature(P, f, start_feature, end_feature):
     #         return []        
-    if np.max(saliency) > cfg.feature_saliency_thresh: #1e-8: #0.001:
+    if True: #np.max(saliency) > cfg.feature_saliency_thresh: #1e-8: #0.001:
         if draw:
             plut.fill_circle(f.center, f.r, 'r', alpha=0.3)
             plt.text(*f.center, str([ff.i for ff in features]))
@@ -1450,7 +1456,7 @@ def compute_segment_maxima(P, ds, start_feature, end_feature, closed, farthest=F
         print((a, b))
         print(n)
         
-    features = open_sym_extrema(Pv, ds, self_intersections)
+    features = open_sym_extrema(Pv, ds, is_sat=False, self_intersections=self_intersections)
     # features = sym_extrema(Pv, ds, closed=False, farthest=farthest, draw_steps=draw_steps) #, full_output=True)
     if draw_steps:
         plut.stroke_poly(Pv, 'b', linewidth=2., closed=False)
@@ -1954,9 +1960,11 @@ def discard_unsalient(features, P, closed, only_minima=False):
         f = features[i]
         # if is_minimum(f):
         #     pdb.set_trace()
-        d = compute_depth_saliency(P, fprev, f, fnext, closed)
-        if np.isnan(d):
-            d = 10
+
+        if cfg.use_saliency:
+            d = compute_depth_saliency(P, fprev, f, fnext, closed)
+            if np.isnan(d):
+                d = 10
             #continue
         
         thresh = cfg.feature_saliency_thresh
@@ -1972,10 +1980,14 @@ def discard_unsalient(features, P, closed, only_minima=False):
             thresh = cfg.minima_saliency_thresh
             
             print('Min saliency = ' + str(d))
-            
-        if d >= thresh and f.r < r_thresh: #cfg.feature_saliency_thresh:
-            salient_features.append(f)
-    
+
+        if cfg.use_saliency:
+            if d >= thresh and f.r < r_thresh: #cfg.feature_saliency_thresh:
+                salient_features.append(f)
+        else:
+            if f.r < r_thresh:
+                salient_features.append(f)
+
     if not closed:
         salient_features.append(features[-1])
 
@@ -3357,7 +3369,7 @@ def dynamic_symmetry_extrema(P, closed=False):
                     c = disks[e].center
                     r = disks[e].r
                     
-                    if r > cfg.r_thresh:
+                    if r >= cfg.r_thresh:
                         continue
 
                     p = sort_anchors(disks[e].anchors, Pv_s, closed=False)
