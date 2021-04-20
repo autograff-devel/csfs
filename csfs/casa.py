@@ -953,6 +953,9 @@ def draw_shape_and_skeleton(MA, draw_spokes=False, draw_forks=False, convexities
 #endf
 
 def debug_features(MA, branch, F=[], min_radius=2, draw_spokes=False):
+    if type(MA) != nx.Graph:
+        MA = MA.MA
+
     features = MA.graph['features']
     disks = MA.graph['disks']
     points = MA.graph['points']
