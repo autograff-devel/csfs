@@ -35,7 +35,7 @@ class perf_timer:
 cfg = lambda: None
 cfg.verbose = True
 
-Disk = namedtuple('Disk', 'center r anchors residual inf') 
+Disk = namedtuple('Disk', 'center r anchors residual inf contact_points')
 Edge = namedtuple('Edge', 'center r verts anchors residual inf')
 
 def debug_print(s):
@@ -629,7 +629,8 @@ def make_graph(vma, vor_delu, farthest, closed):
     data = G.graph['data']
     tris = delu.points[delu.simplices]
     points = G.graph['points']
-
+    if len(points) != len(delu.points):
+        pdb.set_trace()
     # traverse each branch and set vertices
     branches = graph_branches(G)
     for branch in branches:
@@ -640,6 +641,7 @@ def make_graph(vma, vor_delu, farthest, closed):
             branch = branch[::-1]
         for a, b in zip(branch, branch[1:]):
             e = data[(a, b)]
+            contact_points = list(e.anchors)
             v = a
             if v in infinite: #infinite[v]:
                 if farthest:
@@ -653,13 +655,15 @@ def make_graph(vma, vor_delu, farthest, closed):
                     r = geom.distance(center, points[e.anchors[0]])
                 else:
                     center = verts[v]
+                    contact_points = list(delu.simplices[v])
                     r = geom.circumcircle_radius(*tris[v])
 
             disk = Disk(center=center, #verts[v],
                                    r=r,
                                    anchors=e.anchors,
                                    residual=e.residual,
-                                   inf=v in infinite) #infinite[v])
+                                   inf=v in infinite,
+                        contact_points=contact_points) #infinite[v])
 
             G.graph['disks'][v] = disk
             vpos[v] = center #disk.center
@@ -680,7 +684,8 @@ def make_graph(vma, vor_delu, farthest, closed):
                                    r=r,
                                    anchors=e.anchors,
                                    residual=e.residual,
-                                   inf=v in infinite) #infinite[v])
+                                   inf=v in infinite,
+                                   contact_points=list(e.anchors)) #infinite[v])
             G.graph['disks'][v] = disk
             vpos[v] = disk.center
             
@@ -711,11 +716,15 @@ def make_graph(vma, vor_delu, farthest, closed):
             anchor_dists.append(abs(geom.distance(*points[e.anchors]) - r*2))
         
         e = candidate_edges[np.argmin(anchor_dists)]
+        contact_points = list(e.anchors)
+        if G.degree(v) > 2 and v not in infinite:
+            contact_points = list(delu.simplices[v])
         disk = Disk(center=verts[v],
                         r=r,
                         anchors=e.anchors,
                         residual=e.residual,
-                        inf=v in infinite) #infinite[v])
+                        inf=v in infinite,
+                    contact_points=contact_points) #infinite[v])
                         
         G.graph['disks'][v] = disk
         vpos[v] = disk.center

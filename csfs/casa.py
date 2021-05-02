@@ -92,6 +92,9 @@ class FlatShape:
             self.start_inds += [self.start_inds[-1] + lenf(P)]
         self.shape = S
 
+    def subcontour_index(self, i):
+        return self.shape_index(i)[0]
+
     def flat_index(self, i, j):
         return self.start_inds[i] + j
 
@@ -414,7 +417,7 @@ def compute_tangents(features, ds):
 def compute_skeleton_and_features(shape, fork_merge_thresh=0.0, size=None, exterior=False, debug_draw=False, prune_steps=0, get_full_MA=False, compute_sym_features=True):
     if size is None:
         box = geom.bounding_box(shape)
-        size = max(geom.rect_h(box), geom.rect_w(box)) #geom.bounding_box(shape))
+        size = min(geom.rect_h(box), geom.rect_w(box)) #geom.bounding_box(shape))
 
     # approx arc lenth increment
     ds = np.mean(np.concatenate([geom.chord_lengths(P) for P in shape]))
