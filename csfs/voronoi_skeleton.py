@@ -152,6 +152,11 @@ def scale_shape_and_skeleton(S, MA, scale):
     MA.graph['vpos'] = np.array(MA.graph['vpos'])*scale
     return S, MA
 
+def skeleton_shape(S, thresh, closed=True, internal_flag=0):
+    E, MA = voronoi_skeleton(S, thresh, closed=closed, internal_flag=internal_flag)
+    branches = graph_branches(MA)
+    vpos = MA.graph['vpos']
+    return [branch_contour(b, vpos) for b in branches]
 
 def voronoi_skeleton(S, thresh, residual=chord_residual, closed=False, get_branches=False, get_voronoi=False, farthest=False, internal_flag=0, debug_draw_residuals=False, terminal_branches=None ):
     ''' Extract Vornoi Medial Axis for a set of open or closed contours

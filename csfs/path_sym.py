@@ -1656,6 +1656,10 @@ def expand_feature_anchor_at(features, P, i, closed, thresh=None):
                       anchors=(a1, a2))
 
 def expand_all_anchors(P, features, closed, thresh=None):
+    ''' Expands anchors, increasing contact region to a segment within tolerance of radius.
+    Note that while this is useful to capture "almost circular" regions, it can create problems with corners,
+    i.e a perceptually small difference in CSF radius (e.g. due to quantization) can accentuate the difference in contact region length
+    which can affect computations such as "significance"'''
     if thresh==None:
         thresh = cfg.anchor_expansion_tol
     if thresh <= 0.:
