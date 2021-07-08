@@ -174,7 +174,11 @@ class FlatShape:
     def wrapped_range(self, flat_a, flat_b, extend=0, extend_a=0, extend_b=0, safe=False):
         #flat_a, flat_b = self.sort_wrapped(flat_a, flat_b)
         return self.range_internal(flat_a, flat_b, extend, extend_a, extend_b, safe)
-    
+
+    def wrapped_range_shortest(self, flat_a, flat_b, extend=0, extend_a=0, extend_b=0, safe=False):
+        flat_a, flat_b = self.sort_wrapped(flat_a, flat_b)
+        return self.range_internal(flat_a, flat_b, extend, extend_a, extend_b, safe)
+
     
     def wrapped_range_bidirectional(self, flat_a, flat_b, safe=False):
         return self.range_internal(flat_a, flat_b, 0, safe=safe), self.range_internal(flat_b, flat_a, 0, safe=safe)

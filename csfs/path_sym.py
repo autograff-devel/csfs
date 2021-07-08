@@ -159,7 +159,7 @@ COMPUTE_INFLECTIONS = 2
 COMPUTE_ALL = COMPUTE_MINIMA | COMPUTE_INFLECTIONS
 CUMPUTE_MAXIMA = 0
 
-def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, flags=CUMPUTE_MAXIMA, full_output=False, vma_thresh=None, full_reconstruction=False, stats={}):
+def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, flags=CUMPUTE_MAXIMA, full_output=False, full_reconstruction=False, stats={}):
     """Compute CSFs or optionally fully reconstruct one or more input contours
        Two variants:
        - for closed shapes or with force_static=True, recursively computes CSFs starting from interior/exterior MA
@@ -191,11 +191,6 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
     """    
     if type(P) == list:
         return compute_shape_features(P, closed, n_steps, draw_steps, force_static, flags, full_output, full_reconstruction, stats)
-
-    # force vma thresh if requested
-    vma_thresh_old = cfg.vma_thresh
-    if vma_thresh is not None:
-        cfg.vma_thresh = vma_thresh
 
     # print("Vma thresh is: %g"%cfg.vma_thresh)
     def test_features(features):
@@ -292,9 +287,6 @@ def compute_features(P, closed, n_steps=2, draw_steps=0, force_static=False, fla
         features = sort_features(P, features + inflections, closed) #minima + inflections + features)
     
     test_features(features)
-    
-    # reset original thresh
-    cfg.vma_thresh = vma_thresh_old
     
     if full_reconstruction: # approximate whole trace with euler spirals
         features = compute_internal_angles(features, P)
