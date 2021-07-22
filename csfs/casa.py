@@ -959,7 +959,7 @@ def draw_shape_and_skeleton(MA, draw_spokes=False, draw_forks=False, convexities
     #endif
 #endf
 
-def debug_features(MA, branch, F=[], min_radius=2, draw_spokes=False):
+def debug_features(MA, branch, F=[], min_radius=2, draw_spokes=False, figsize=(5,5)):
     if type(MA) != nx.Graph:
         MA = MA.MA
 
@@ -967,7 +967,7 @@ def debug_features(MA, branch, F=[], min_radius=2, draw_spokes=False):
     disks = MA.graph['disks']
     points = MA.graph['points']
     plt.clf()
-    plt.figure(figsize=(5,5))
+    plt.figure(figsize=figsize)
     plut.stroke_shape(MA.graph['shape'], 'k')
     draw_skeleton(MA)
     
