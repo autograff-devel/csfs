@@ -8,7 +8,7 @@ import numpy as np
 cfg = utils.Config()
 
 cfg.add("tangent_sleeve_tolerance", 2., "tangent approximation tolerance, multiple of ds")
-cfg.add("max_radius_height_ratio", 0.25, "maximum feature radius for abs maxima (relative to bbox)")
+cfg.add("max_radius_height_ratio", 0.15, "maximum feature radius for abs maxima (relative to bbox)")
 # 0.3, 0.1 for Old London R, need a more robust way to determine which concavities are valid. BAR would be better
 cfg.add("vma_thresh", 0.5, "Voronoi skeleton reg. threshold")
 cfg.add("straightness_tolerance", 0.2, "Straight segment tolerance (multiple of ds)")
@@ -31,7 +31,7 @@ cfg.add("num_sym_passes", 3, "Max passes for csf ")
 cfg.add("debug_draw", False, "debug draw")
 
 cfg.add("smoothing", 0.0, "input smoothing window")
-cfg.add("anchor_expansion_tol", 0.0, "annulus tolerance for terminal disks (was 0.05). See path_sym.expand_all_anchors for notes. Should be zero, or need corner detection")
+cfg.add("anchor_expansion_tol", 0.001, "annulus tolerance for terminal disks (was 0.05). See path_sym.expand_all_anchors for notes. Should be zero, or need corner detection")
 cfg.add("minima_expansion_tol", 0.05, "annulus for minima")
 
 cfg.add("refine_clothoid_fit", True, "Least squares clothoid fit refinement")
