@@ -447,8 +447,8 @@ def sym_extrema(P, ds, closed=True, farthest=False, full_output=False, vma_thres
             vma.draw_skeleton(MA)
             
         for e in E:
-            if not farthest and disks[e].r >= cfg.r_thresh:
-                continue
+            # if not farthest and disks[e].r >= cfg.r_thresh:
+            #     continue
             p = sort_anchors(disks[e].anchors, P, closed)
             #p = expand_voronoi_anchors(disks[e].anchors, disks[e], P, closed)
             mid = get_anchor_midpoint_index(p, P, closed) 
@@ -1647,7 +1647,7 @@ def expand_feature_anchor_at(features, P, i, closed, thresh=None):
     return f._replace(i=mid,
                       anchors=(a1, a2))
 
-def expand_all_anchors(P, features, closed, thresh=None):
+def expand_all_anchors(P, features, closed, thresh=None, ds=0):
     ''' Expands anchors, increasing contact region to a segment within tolerance of radius.
     Note that while this is useful to capture "almost circular" regions, it can create problems with corners,
     i.e a perceptually small difference in CSF radius (e.g. due to quantization) can accentuate the difference in contact region length
@@ -1663,7 +1663,8 @@ def expand_all_anchors(P, features, closed, thresh=None):
     for i in I:
         if not closed and i == 0 or i == m-1:
             continue
-        features[i] = expand_feature_anchor_at(features, P, i, closed, thresh)
+        if features[i].r > ds:
+            features[i] = expand_feature_anchor_at(features, P, i, closed, thresh)
     return features
     
 def expand_and_recompute_midpoint(P, f, closed, thresh=None, limits=None):
@@ -1981,7 +1982,7 @@ def discard_unsalient(features, P, closed, only_minima=False):
             if d >= thresh and f.r < r_thresh: #cfg.feature_saliency_thresh:
                 salient_features.append(f)
         else:
-            if f.r < r_thresh:
+            if f.sign > 0 or f.r < r_thresh:
                 salient_features.append(f)
 
     if not closed:
@@ -2803,7 +2804,7 @@ def compute_segment_minima_OLDDD(P, ds, start_feature, end_feature, closed, draw
     if is_minimum(f):
         r_thresh = cfg.minima_r_thresh
 
-    if f.r < r_thresh:
+    if f.sign > 0 or f.r < r_thresh:
         features_ok = [f]
     
     if features_ok and draw_steps:
