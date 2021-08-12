@@ -225,7 +225,7 @@ def compute_CSFs(MA, shape, ds, size, debug_draw=False):
     feature_list = sym.compute_shape_features(shape, closed=True, n_steps=cfg.num_sym_passes, flags=flags, draw_steps=cfg.draw_steps, stats=stats)
 
     if cfg.anchor_expansion_tol > 0:
-        feature_list  = [sym.expand_all_anchors(P, features, True, cfg.anchor_expansion_tol) 
+        feature_list  = [sym.expand_all_anchors(P, features, True, cfg.anchor_expansion_tol, ds)
                             for P, features in zip(shape, feature_list)]
 
     # This is not strictly necessary, unless we want to visualize the CSF symmetry axes
